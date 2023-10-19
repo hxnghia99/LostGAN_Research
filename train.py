@@ -8,6 +8,7 @@ from torchvision.utils import make_grid
 
 
 from data.cocostuff_loader import CocoSceneGraphDataset
+from data.data_loader import FireDataset
 from model.resnet_generator import ResnetGenerator128
 from model.rcnn_discriminator import CombineDiscriminator128
 from utils.util import VGGLoss
@@ -37,6 +38,12 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
 def main(args):
     #Configuration setup
     dataset_path =      os.path.join("./datasets", args.dataset)
+    
+    lamb_obj = 1.0
+    lamb_img = 0.1
+    img_size = (args.img_size, args.img_size)
+    g_lr, d_lr = args.g_lr, args.d_lr
+    
     if args.dataset == 'coco':
         train_img_dir =     os.path.join(dataset_path, "train2017")
         instances_json =    os.path.join(dataset_path, "annotations/instances_train2017.json")
@@ -44,27 +51,25 @@ def main(args):
         num_classes = 184
         num_obj = 8
         z_dim = 128
-        lamb_obj = 1.0
-        lamb_img = 0.1
 
+        train_data = CocoSceneGraphDataset(image_dir=train_img_dir,
+                                       instances_json=instances_json,
+                                       stuff_json=stuff_json,
+                                       stuff_only=True, image_size=img_size, left_right_flip=True)
 
     elif args.dataset == 'fire':
-        pass
-
-    img_size = (args.img_size, args.img_size)
-    g_lr, d_lr = args.g_lr, args.d_lr
-
-    
-    
+        train_img_dir   = os.path.join(dataset_path, "images")
+        classname_file  = os.path.join(dataset_path, "class_names.txt")
+        num_classes = 4
+        num_obj = 8
+        z_dim = 128
+        train_data = FireDataset(image_dir=train_img_dir, classname_file=classname_file,
+                                image_size=img_size, left_right_flip=True)
 
 
     #Training pre-steps: dataloader, model, optimizer
     #Data
-    train_data = CocoSceneGraphDataset(image_dir=train_img_dir,
-                                       instances_json=instances_json,
-                                       stuff_json=stuff_json,
-                                       stuff_only=True, image_size=img_size, left_right_flip=True)
-    dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=args.num_workers)
+    dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=0)#num_workers=args.num_workers)
     
     #Model
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
@@ -101,8 +106,9 @@ def main(args):
     #Read from here
     start_time = time.time()
     vgg_loss = VGGLoss()
-    vgg_loss = nn.DataParallel(vgg_loss)
-    l1_loss = nn.DataParallel(nn.L1Loss())
+    l1_loss = nn.L1Loss()
+    # vgg_loss = nn.DataParallel(vgg_loss)
+    # l1_loss = nn.DataParallel(nn.L1Loss())
     for epoch in range(args.total_epoch):
         netG.train()
         netD.train()
@@ -168,9 +174,9 @@ def main(args):
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset',        type=str,   default="coco",             help="dataset used for training")
+    parser.add_argument('--dataset',        type=str,   default="fire",             help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
-    parser.add_argument('--batch_size',     type=int,   default=4,                  help="training batch size. Default: 8")
+    parser.add_argument('--batch_size',     type=int,   default=16,                  help="training batch size. Default: 8")
     parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")
     parser.add_argument('--g_lr',           type=float, default=0.0001,             help="learning rate of generator")
     parser.add_argument('--d_lr',           type=float, default=0.0001,             help="learning rate of discriminator")
