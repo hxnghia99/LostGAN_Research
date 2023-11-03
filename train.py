@@ -5,7 +5,10 @@ import torch
 import torch.nn as nn
 from tensorboardX import SummaryWriter
 from torchvision.utils import make_grid
+import numpy as np
 
+import cv2
+import colorsys
 
 from data.cocostuff_loader import CocoSceneGraphDataset
 from data.data_loader import FireDataset
@@ -66,6 +69,8 @@ def main(args):
         train_data = FireDataset(image_dir=train_img_dir, classname_file=classname_file,
                                 image_size=img_size, left_right_flip=True)
 
+        with open("./datasets/fire/class_names.txt", "r") as f:
+            class_names = f.read().splitlines()
 
     #Training pre-steps: dataloader, model, optimizer
     #Data
@@ -105,28 +110,25 @@ def main(args):
 
     #Read from here
     start_time = time.time()
-    vgg_loss = VGGLoss()
+    vgg_loss = VGGLoss()                #average L2-norm between reference and reconstructed
     l1_loss = nn.L1Loss()
-    # vgg_loss = nn.DataParallel(vgg_loss)
-    # l1_loss = nn.DataParallel(nn.L1Loss())
     for epoch in range(args.total_epoch):
         netG.train()
         netD.train()
 
         for idx, data in enumerate(dataloader):
             real_images, label, bbox = data
-            real_images, label, bbox = real_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float().cuda()
+            real_images, label, bbox = real_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float()      #keep bbox in cpu --> make input of netG,netD in gpu
 
             # update D network
             netD.zero_grad()
-            real_images, label = real_images.cuda(), label.long().cuda()
-            d_out_real, d_out_robj = netD(real_images, bbox, label)
+            d_out_real, d_out_robj = netD(real_images, bbox.cuda(), label)
             d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
             d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
 
             z = torch.randn(real_images.size(0), num_obj, z_dim).cuda()     #[batch, num_obj, 128]
-            fake_images = netG(z_img=None, z_obj=z, bbox=bbox, class_label=label.squeeze(dim=-1))
-            d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox, label)
+            fake_images = netG(z_img=None, z_obj=z, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
+            d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
             d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
             d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
 
@@ -137,7 +139,7 @@ def main(args):
             # update G network
             if (idx % 1) == 0:
                 netG.zero_grad()
-                g_out_fake, g_out_obj = netD(fake_images, bbox, label)
+                g_out_fake, g_out_obj = netD(fake_images, bbox.cuda(), label)
                 g_loss_fake = - g_out_fake.mean()
                 g_loss_obj = - g_out_obj.mean()
                 
@@ -148,7 +150,7 @@ def main(args):
                 g_loss.backward()
                 g_optimizer.step()
 
-            if (idx+1) % 500 == 0:
+            if (idx+1) % 250 == 0:
                 elapsed = time.time() - start_time
                 elapsed = str(datetime.timedelta(seconds=elapsed))
                 logger.info("Time Elapsed: [{}]".format(elapsed))
@@ -169,14 +171,63 @@ def main(args):
         # save model
         if (epoch + 1) % 5 == 0:
             torch.save(netG.state_dict(), os.path.join(args.out_path, 'model/', 'G_%d.pth' % (epoch+1)))
+            
+            for idx, data in enumerate(dataloader):
+                if idx == 0:
+                    real_images, label, bbox = data
+                    real_images, label, bbox = real_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float()
+                    z_obj = torch.from_numpy(truncted_random(num_o=8, thres=2.0)).float().cuda()
+                    z_im = torch.from_numpy(truncted_random(num_o=1, thres=2.0)).view(1, -1).float().cuda()
+                    break
+                
+            netG.eval()
+            fake_images = netG.forward(z_img=z_im, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+            fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
+            fake_images = np.array(fake_images*255, np.uint8)
+            layout_img = draw_layout(label, bbox, [256,256], class_names)
+
+            cv2.imwrite("./samples/"+ 'image_G_%d.png'%(epoch+1), cv2.resize(fake_images, (256, 256)))
+            cv2.imwrite("./samples/"+ 'layout_G_%d.png'%(epoch+1), cv2.resize(layout_img, (256, 256)))
 
 
+def draw_layout(label, bbox, size, class_names):
+    temp_img = np.zeros([size[0]+50,size[1]+50,3])
+    bbox = (bbox[0]*size[0]).numpy().astype(np.int32)
+    label = label[0]
+    num_classes = 184
+
+    rectangle_hsv_tuples     = [(1.0 * x / num_classes, 1., 1.) for x in range(num_classes)]
+    label_hsv_tuples         = [(1.0 * x / num_classes, 1., 1.) for x in range(int(num_classes/2), num_classes)] 
+    label_hsv_tuples        += [(1.0 * x / num_classes, 1., 1.) for x in range(0, int(num_classes/2))]                                
+    rand_rectangle_colors    = list(map(lambda x: colorsys.hsv_to_rgb(*x), rectangle_hsv_tuples))
+    rand_rectangle_colors    = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), rand_rectangle_colors))
+    rand_text_colors         = list(map(lambda x: colorsys.hsv_to_rgb(*x), label_hsv_tuples))
+    rand_text_colors         = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), rand_text_colors))
+    for i in range(len(bbox)):
+        bbox_color = rand_rectangle_colors[label[i]]
+        label_color = rand_text_colors[label[i]]
+        x,y,width,height = bbox[i]
+        x,y = x+25, y+25
+        class_name = class_names[label[i]]
+        cv2.rectangle(temp_img, (x, y), (x + width, y + height), bbox_color, 1)  # (0, 255, 0) is the color (green), 2 is the thickness
+        cv2.putText(temp_img, class_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, bbox_color, 1)
+   
+    return temp_img
+
+
+def truncted_random(num_o=8, thres=1.0):
+    z = np.ones((1, num_o, 128)) * 100
+    for i in range(num_o):
+        for j in range(128):
+            while z[0, i, j] > thres or z[0, i, j] < - thres:
+                z[0, i, j] = np.random.normal()
+    return z
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset',        type=str,   default="fire",             help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
-    parser.add_argument('--batch_size',     type=int,   default=16,                  help="training batch size. Default: 8")
+    parser.add_argument('--batch_size',     type=int,   default=32,                  help="training batch size. Default: 8")
     parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")
     parser.add_argument('--g_lr',           type=float, default=0.0001,             help="learning rate of generator")
     parser.add_argument('--d_lr',           type=float, default=0.0001,             help="learning rate of discriminator")

@@ -28,7 +28,7 @@ class MaskRegressNet(nn.Module):
         conv3.append(nn.utils.spectral_norm(nn.Conv2d(256, 256, kernel_size=3, padding=1)))
         conv3.append(nn.InstanceNorm2d(256))
         conv3.append(nn.ReLU())
-        conv3.append(nn.utils.spectral_norm(nn.Conv2d(256, 1, kernel_size=1, padding=0)))
+        conv3.append(nn.utils.spectral_norm(nn.Conv2d(256, 1, kernel_size=1)))
         conv3.append(nn.Sigmoid())
         self.conv3 = nn.Sequential(*conv3)
 
@@ -36,12 +36,11 @@ class MaskRegressNet(nn.Module):
         """
         input params:
             - obj_feat:     (b*num_o, feat_dim) --> latent_vector of objects
-            - param bbox:   (b, num_o, 4)
+            - bbox:   (b, num_o, 4)
         return:
             - bbmap: (b, num_o, map_size, map_size)
         """
         b, num_o, _ = bbox.size()
-        # obj_feat = obj_feat.view(b*num_o, -1)
         x = self.fc(obj_feat)                           #linear mapping: [b*o, 128+180] --> [b*o, 256*4*4]
         x = self.conv1(x.view(b*num_o, 256, 4, 4))      #output [b*o, 256, 4, 4]     
         x = F.interpolate(x, size=8, mode='bilinear')   #output [b*o, 256, 8, 8]     
@@ -58,7 +57,7 @@ class MaskRegressNet(nn.Module):
     def _masks_to_layout(self, boxes, masks, H, W=None):
         """
         Input params:
-            - boxes: Tensor of shape [b, num_o, 4] giving bboxes in format [x0, y0, x1, y1] with [0, 1] coordinate space
+            - boxes: Tensor of shape [b, num_o, 4] giving bboxes in format [xm, ym, w, h] with [0, 1] coordinate space
             - masks: Tensor of shape [b, num_o, M, M] giving binary masks for each object
             - H, W: size of the output image
         Return:
@@ -74,11 +73,11 @@ class MaskRegressNet(nn.Module):
 
         img_in = masks.float().view(b*num_o, 1, M, M)
         #input: [bo, 1, 16, 16], [bo, 64, 64, 2]
-        # output[b,:,h,w] is interpolated from size-2 vector grid[b,h,w]
-        sampled = F.grid_sample(img_in, grid, mode='bilinear')
+        # output[bo,:,64,64] is interpolated from size-2 vector grid[bo,h,w]
+        sampled = F.grid_sample(img_in, grid, mode='bilinear', align_corners=True)
 
         return sampled.view(b, num_o, H, W)
-
+        
 
     def _boxes_to_grid(self, boxes, H, W):
         """

@@ -153,12 +153,14 @@ class FireDataset(Dataset):
 
         # If less then 8 objects, add 0 class_id and unused bbox --> then add the background as 8th object
         for idx in range(len(objects), self.max_objects_per_image):
-            if idx+1 == self.max_objects_per_image:
-                classes.append(self.vocal['background'])
-                boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
-            else:    
-                classes.append(self.vocal['_None_'])
-                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            # if idx+1 == self.max_objects_per_image:
+            #     classes.append(self.vocal['background'])
+            #     boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
+            # else:    
+            #     classes.append(self.vocal['_None_'])
+            #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            classes.append(self.vocal['_None_'])
+            boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
 
         classes = torch.LongTensor(classes)
         boxes = np.vstack(boxes)
