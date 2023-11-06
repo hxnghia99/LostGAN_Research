@@ -33,10 +33,10 @@ class ResnetGenerator128(nn.Module):
         mapping = list()
         self.mappping = nn.Sequential(*mapping)
 
-        self.alpha1 = nn.Parameter(torch.zeros(1, 184, 1))
-        self.alpha2 = nn.Parameter(torch.zeros(1, 184, 1))
-        self.alpha3 = nn.Parameter(torch.zeros(1, 184, 1))
-        self.alpha4 = nn.Parameter(torch.zeros(1, 184, 1))
+        self.alpha1 = nn.Parameter(torch.zeros(1, num_classes, 1))
+        self.alpha2 = nn.Parameter(torch.zeros(1, num_classes, 1))
+        self.alpha3 = nn.Parameter(torch.zeros(1, num_classes, 1))
+        self.alpha4 = nn.Parameter(torch.zeros(1, num_classes, 1))
         
         self.sigmoid = nn.Sigmoid()
         
@@ -161,7 +161,7 @@ class ResBlock(nn.Module):
         #learnable_shortcut if upsamping or in_c!=out_c
         self.learnable_sc = in_ch != out_ch or upsample
         if self.learnable_sc:
-            self.c_sc = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=1, padding=0), eps=1e-4)
+            self.c_sc = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=1, padding=0), eps=1e-4)        #must use the same name c_sc --> save weight and load weight correctly
 
         #predict_mask of different class for checking
         self.predict_mask = predict_mask

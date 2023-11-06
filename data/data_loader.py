@@ -131,7 +131,7 @@ class FireDataset(Dataset):
                 if flip:
                     image = PIL.ImageOps.mirror(image)
                 WW, HH = image.size
-                image = self.transform(image.convert('RGB'))
+                
 
         #Read annotation
         annotation_data = self.annotation_datas[index]
@@ -151,6 +151,17 @@ class FireDataset(Dataset):
                 xm = 1 - (xm + w)
             boxes.append(np.array([xm, ym, w, h]))
 
+        # used_boxes = np.array(boxes)
+        # used_boxes[:][0::2] = used_boxes[:][0::2] * WW
+        # used_boxes[:][1::2] = used_boxes[:][1::2] * HH
+        # used_boxes = np.array(used_boxes, dtype=np.int32)
+        # used_image = image.copy()
+        # for i, box in enumerate(used_boxes):
+        #     w, h = box[2:4]
+        #     noise = np.array(np.random.rand(h,w) * 255, dtype=np.uint8)
+        #     noise = np.expand_dims(noise, axis=2)
+
+
         # If less then 8 objects, add 0 class_id and unused bbox --> then add the background as 8th object
         for idx in range(len(objects), self.max_objects_per_image):
             # if idx+1 == self.max_objects_per_image:
@@ -164,7 +175,7 @@ class FireDataset(Dataset):
 
         classes = torch.LongTensor(classes)
         boxes = np.vstack(boxes)
-
+        image = self.transform(image.convert('RGB'))
         # print(image.shape, classes.shape, boxes.shape)
 
         return image, classes, boxes

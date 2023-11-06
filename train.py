@@ -122,10 +122,11 @@ def main(args):
 
             # update D network
             netD.zero_grad()
+            #real image+objects
             d_out_real, d_out_robj = netD(real_images, bbox.cuda(), label)
             d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
             d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
-
+            #fake image+objects
             z = torch.randn(real_images.size(0), num_obj, z_dim).cuda()     #[batch, num_obj, 128]
             fake_images = netG(z_img=None, z_obj=z, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
             d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
