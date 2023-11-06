@@ -1,15 +1,19 @@
 import os, sys
 import argparse, logging, time, datetime
+
+from torch import Tensor
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import torch
 import torch.nn as nn
+# from pytorch_ssim import ssim
 from tensorboardX import SummaryWriter
 from torchvision.utils import make_grid
 import numpy as np
 
 import cv2
 import colorsys
+from piqa import SSIM
 
 from data.cocostuff_loader import CocoSceneGraphDataset
 from data.data_loader import FireDataset
@@ -17,7 +21,9 @@ from model.resnet_generator import ResnetGenerator128
 from model.rcnn_discriminator import CombineDiscriminator128
 from utils.util import VGGLoss
 
-
+class SSIMLoss(SSIM):
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
+        return 1. - super().forward(x, y)
 
 def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
     logger = logging.getLogger(name)
@@ -62,12 +68,13 @@ def main(args):
                                        stuff_only=True, image_size=img_size, left_right_flip=True)
 
     elif args.dataset == 'fire':
-        train_img_dir   = os.path.join(dataset_path, "images")
+        train_fire_img_dir   = os.path.join(dataset_path, "fire_images")
+        train_non_fire_img_dir   = os.path.join(dataset_path, "non_fire_images")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
         num_classes = 4
         num_obj = 8
         z_dim = 128
-        train_data = FireDataset(image_dir=train_img_dir, classname_file=classname_file,
+        train_data = FireDataset(fire_image_dir=train_fire_img_dir, non_fire_image_dir=train_non_fire_img_dir, classname_file=classname_file,
                                 image_size=img_size, left_right_flip=True)
 
         with open("./datasets/fire/class_names.txt", "r") as f:
@@ -76,7 +83,7 @@ def main(args):
     #Training pre-steps: dataloader, model, optimizer
     #Data
     dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=0)#num_workers=args.num_workers)
-    
+
     #Model
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
     netD = CombineDiscriminator128(num_classes=num_classes).cuda()
@@ -113,23 +120,24 @@ def main(args):
     start_time = time.time()
     vgg_loss = VGGLoss()                #average L2-norm between reference and reconstructed
     l1_loss = nn.L1Loss()
+    ssim = SSIMLoss().cuda()
     for epoch in range(args.total_epoch):
         netG.train()
         netD.train()
 
         for idx, data in enumerate(dataloader):
-            real_images, label, bbox = data
-            real_images, label, bbox = real_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float()      #keep bbox in cpu --> make input of netG,netD in gpu
-
+            [fire_images, non_fire_images, non_fire_crops], label, bbox = data
+            fire_images, non_fire_crops, label, bbox = fire_images.cuda(), non_fire_crops.cuda(), label.long().cuda().unsqueeze(-1), bbox.float()      #keep bbox in cpu --> make input of netG,netD in gpu
+            non_fire_images = non_fire_images.cuda()
             # update D network
             netD.zero_grad()
             #real image+objects
-            d_out_real, d_out_robj = netD(real_images, bbox.cuda(), label)
+            d_out_real, d_out_robj = netD(fire_images, bbox.cuda(), label)
             d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
             d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
             #fake image+objects
-            z = torch.randn(real_images.size(0), num_obj, z_dim).cuda()     #[batch, num_obj, 128]
-            fake_images = netG(z_img=None, z_obj=z, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
+            z = torch.randn(fire_images.size(0), num_obj, z_dim).cuda()     #[batch, num_obj, 128]
+            fake_images = netG(z_img=non_fire_crops, z_obj=z, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
             d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
             d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
             d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
@@ -139,16 +147,28 @@ def main(args):
             d_optimizer.step()
 
             # update G network
-            if (idx % 1) == 0:
+            if (idx % 1) == 0:      
                 netG.zero_grad()
                 g_out_fake, g_out_obj = netD(fake_images, bbox.cuda(), label)
                 g_loss_fake = - g_out_fake.mean()
                 g_loss_obj = - g_out_obj.mean()
-                
-                pixel_loss = l1_loss(fake_images, real_images).mean()
-                feat_loss = vgg_loss(fake_images, real_images).mean()
 
-                g_loss = g_loss_obj * lamb_obj + g_loss_fake * lamb_img + pixel_loss + feat_loss
+                # for idb, boxes_data in enumerate(bbox.cuda()):
+                #     label_flag = label[idb].squeeze(1)
+                #     label_flag = label_flag!=0
+                #     boxes_data = boxes_data[label_flag]
+                #     for box_data in boxes_data:
+                #         xmin, ymin, w, h = [int(x.item()) for x in (box_data*128)]
+                #         xmax, ymax = xmin+w, ymin+h
+                        
+                #         fake_images[idb][:, xmin:xmax, ymin:ymax] = 0
+                #         non_fire_images[idb][:, xmin:xmax, ymin:ymax] = 0
+                ssim_loss = ssim(fake_images*0.5+0.5, non_fire_images*0.5+0.5)
+
+                # pixel_loss = l1_loss(fake_images, real_images).mean()
+                feat_loss = vgg_loss(fake_images, non_fire_images).mean()
+
+                g_loss = g_loss_obj * lamb_obj + g_loss_fake * lamb_img + ssim_loss #+ pixel_loss + feat_loss
                 g_loss.backward()
                 g_optimizer.step()
 
@@ -165,9 +185,10 @@ def main(args):
                                                                                                         d_loss_robj.item(),
                                                                                                         d_loss_fobj.item(),
                                                                                                         g_loss_obj.item()))
-                logger.info("             pixel_loss: {:.4f}, feat_loss: {:.4f}".format(pixel_loss.item(), feat_loss.item()))
+                logger.info("             ssim_loss: {:.4f}, feat_loss: {:.4f}".format(ssim_loss.item(), feat_loss.item()))
+                # logger.info("             pixel_loss: {:.4f}, feat_loss: {:.4f}".format(pixel_loss.item(), feat_loss.item()))
 
-                writer.add_image("real images", make_grid(real_images.cpu().data * 0.5 + 0.5, nrow=4), epoch*len(dataloader) + idx + 1)
+                writer.add_image("real images", make_grid(fire_images.cpu().data * 0.5 + 0.5, nrow=4), epoch*len(dataloader) + idx + 1)
                 writer.add_image("fake images", make_grid(fake_images.cpu().data * 0.5 + 0.5, nrow=4), epoch*len(dataloader) + idx + 1)
 
         # save model
@@ -176,21 +197,25 @@ def main(args):
             
             for idx, data in enumerate(dataloader):
                 if idx == 0:
-                    real_images, label, bbox = data
-                    real_images, label, bbox = real_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float()
+                    list_images, label, bbox = data
+                    _, _, non_fire_crops = list_images
+                    non_fire_crops, label, bbox = non_fire_crops.cuda(), label.long().cuda().unsqueeze(-1), bbox.float()
+                    non_fire_crops = non_fire_crops[0:1]
+                    label = label[0:1]
+                    bbox = bbox[0:1]
                     z_obj = torch.from_numpy(truncted_random(num_o=8, thres=2.0)).float().cuda()
-                    z_im = torch.from_numpy(truncted_random(num_o=1, thres=2.0)).view(1, -1).float().cuda()
+                    # z_im = torch.from_numpy(truncted_random(num_o=1, thres=2.0)).view(1, -1).float().cuda()
                     break
                 
             netG.eval()
-            fake_images = netG.forward(z_img=z_im, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+            fake_images = netG.forward(z_img=non_fire_crops, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
             fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             fake_images = np.array(fake_images*255, np.uint8)
             layout_img = draw_layout(label, bbox, [256,256], class_names)
 
             cv2.imwrite("./samples/"+ 'image_G_%d.png'%(epoch+1), cv2.resize(fake_images, (256, 256)))
             cv2.imwrite("./samples/"+ 'layout_G_%d.png'%(epoch+1), cv2.resize(layout_img, (256, 256)))
-
+            netG.train()
 
 def draw_layout(label, bbox, size, class_names):
     temp_img = np.zeros([size[0]+50,size[1]+50,3])

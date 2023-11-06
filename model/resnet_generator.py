@@ -6,7 +6,7 @@ from .norm_module import SpatialAdaptiveBatchNorm2d, SpatialAdaptiveInstanceNorm
 from .mask_regression import MaskRegressNet
 
 class ResnetGenerator128(nn.Module):
-    def __init__(self, ch=64, z_obj_random_dim=128, z_obj_class_dim=180, num_classes=184, output_dim=3, mask_size=16, map_size= 64):
+    def __init__(self, ch=64, z_obj_random_dim=128, z_obj_class_dim=180, num_classes=184, output_dim=3, mask_size=16, map_size= 64, input_dim=3):
         super(ResnetGenerator128, self).__init__()
         
         self.mask_size = mask_size
@@ -18,11 +18,21 @@ class ResnetGenerator128(nn.Module):
         z_obj_dim = z_obj_random_dim + z_obj_class_dim
         self.fc = nn.utils.spectral_norm(nn.Linear(self.z_random_dim, 4*4*16*ch))
 
-        self.res1 = ResBlock(ch*16, ch*16, upsample=True, num_w=z_obj_dim, num_classes=num_classes) #channel: 1024->1024
-        self.res2 = ResBlock(ch*16, ch*8, upsample=True, num_w=z_obj_dim, num_classes=num_classes)  #channel: 1024->512
-        self.res3 = ResBlock(ch*8, ch*4, upsample=True, num_w=z_obj_dim, num_classes=num_classes)  #channel: 512->256
-        self.res4 = ResBlock(ch*4, ch*2, upsample=True, num_w=z_obj_dim, num_classes=num_classes, psp_module=True)  #channel: 256->128
-        self.res5 = ResBlock(ch*2, ch*1, upsample=True, num_w=z_obj_dim, num_classes=num_classes, predict_mask=False)  #channel: 128->64
+        #encoder path
+        self.res0 = OptimizedBlock_en(input_dim, ch, downsample=True)
+        self.res1 = ResBlock_en(ch, ch*2, downsample=True)
+        self.res2 = ResBlock_en(ch*2, ch*4, downsample=True)
+        self.res3 = ResBlock_en(ch*4, ch*8, downsample=True)
+        self.res4 = ResBlock_en(ch*8, ch*16, downsample=True)
+        self.res5 = ResBlock_en(ch*16, ch*16, downsample=False)
+        self.activation = nn.ReLU()
+
+        #decoder path
+        self.res6 = ResBlock(ch*16, ch*16, upsample=True, num_w=z_obj_dim, num_classes=num_classes) #channel: 1024->1024
+        self.res7 = ResBlock(ch*16, ch*8, upsample=True, num_w=z_obj_dim, num_classes=num_classes)  #channel: 1024->512
+        self.res8 = ResBlock(ch*8, ch*4, upsample=True, num_w=z_obj_dim, num_classes=num_classes)  #channel: 512->256
+        self.res9 = ResBlock(ch*4, ch*2, upsample=True, num_w=z_obj_dim, num_classes=num_classes, psp_module=True)  #channel: 256->128
+        self.res10 = ResBlock(ch*2, ch*1, upsample=True, num_w=z_obj_dim, num_classes=num_classes, predict_mask=False)  #channel: 128->64
 
         self.final = nn.Sequential(nn.BatchNorm2d(ch),
                                    nn.ReLU(),
@@ -98,14 +108,23 @@ class ResnetGenerator128(nn.Module):
         bbox_mask = self.mask_regress(latent_vector, bbox)      #encoding latent_vector+bbox --> [b, o, H(64), W(64)]
         
         if z_img is None:
-            z_img = torch.randn((b, self.z_random_dim)).cuda()
+            z_img = torch.randn((b, self.z_random_dim)).cuda()  #shape [b, 128]
         
         bbox_mask_random = self._bbox_mask_generator(z_obj, bbox, self.map_size, self.map_size)
 
-        #4x4
-        x = self.fc(z_img).view(b, -1, 4, 4)        #map [b,128]->[b, 4*4*16*64] --> [b, 1024, 4, 4]
+        # #4x4
+        # x = self.fc(z_img).view(b, -1, 4, 4)        #map [b,128]->[b, 4*4*16*64] --> [b, 1024, 4, 4]
+
+        x = self.res0(z_img)      # 64x64x64
+        x1 = self.res1(x)     # 32x32x128
+        x2 = self.res2(x1)    # 16x16x256
+        x = self.res3(x2)     # 8x8x512
+        x = self.res4(x)      # 4x4x1024
+        x = self.res5(x)      # 4x4x1024
+        x = self.activation(x)  # [batch, 1024, 4, 4]
+
         #8x8    
-        x, stage_mask = self.res1(x, latent_vector, bbox_mask)      #[b, 1024, 8, 8]
+        x, stage_mask = self.res6(x, latent_vector, bbox_mask)      #[b, 1024, 8, 8]
         
         #16x16
         hh, ww = x.size(2), x.size(3)
@@ -113,7 +132,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_random, size=(hh, ww), mode='nearest')
         alpha1 = torch.gather(self.sigmoid(self.alpha1).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox = F.interpolate(bbox_mask, size=(hh, ww), mode='bilinear') * (1 - alpha1) + seman_bbox * alpha1
-        x, stage_mask = self.res2(x, latent_vector, stage_bbox)
+        x, stage_mask = self.res7(x, latent_vector, stage_bbox)
 
         #32x32
         hh, ww = x.size(2), x.size(3)
@@ -121,7 +140,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_random, size=(hh, ww), mode='nearest')
         alpha2 = torch.gather(self.sigmoid(self.alpha2).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox = F.interpolate(bbox_mask, size=(hh, ww), mode='bilinear') * (1 - alpha2) + seman_bbox * alpha2
-        x, stage_mask = self.res3(x, latent_vector, stage_bbox)
+        x, stage_mask = self.res8(x, latent_vector, stage_bbox)
 
         #64x64
         hh, ww = x.size(2), x.size(3)
@@ -129,7 +148,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_random, size=(hh, ww), mode='nearest')
         alpha3 = torch.gather(self.sigmoid(self.alpha3).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox = F.interpolate(bbox_mask, size=(hh, ww), mode='bilinear') * (1 - alpha3) + seman_bbox * alpha3
-        x, stage_mask = self.res4(x, latent_vector, stage_bbox)
+        x, stage_mask = self.res9(x, latent_vector, stage_bbox)
 
         #128x128
         hh, ww = x.size(2), x.size(3)
@@ -137,7 +156,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_random, size=(hh, ww), mode='nearest')
         alpha4 = torch.gather(self.sigmoid(self.alpha4).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox = F.interpolate(bbox_mask, size=(hh, ww), mode='bilinear') * (1 - alpha4) + seman_bbox * alpha4
-        x, _ = self.res5(x, latent_vector, stage_bbox)
+        x, _ = self.res10(x, latent_vector, stage_bbox)
 
         # to RGB
         x = self.final(x)
@@ -207,6 +226,62 @@ class ResBlock(nn.Module):
             mask = None
         return out_feat, mask
     
+
+
+#Residual block: use 2 activation in main branch, conv before downsampling    
+class ResBlock_en(nn.Module):
+    def __init__(self, in_ch, out_ch, ksize=3, pad=1, downsample=False):
+        super(ResBlock_en, self).__init__()
+        self.conv1 = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
+        self.conv2 = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
+        self.activation = nn.ReLU()
+        self.downsample = downsample
+        self.learnable_sc = (in_ch != out_ch) or downsample
+        if self.learnable_sc:
+            self.conv_sc = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=1, padding=0), eps=1e-4)
+
+    def residual(self, in_feat):
+        x = in_feat
+        x = self.conv1(self.activation(x))
+        x = self.conv2(self.activation(x))
+        if self.downsample:
+            x = F.avg_pool2d(x, 2)
+        return x
+
+    def shortcut(self, x):
+        if self.learnable_sc:
+            x = self.conv_sc(x)
+            if self.downsample:
+                x = F.avg_pool2d(x, 2)
+        return x
+
+    def forward(self, in_feat):
+        return self.residual(in_feat) + self.shortcut(in_feat)
+
+
+#Residual block: not using activation function in the 2nd conv (main branch), shortcut: conv after downsampling
+class OptimizedBlock_en(nn.Module):
+    def __init__(self, in_ch, out_ch, ksize=3, pad=1, downsample=False):
+        super(OptimizedBlock_en, self).__init__()
+        self.conv1 = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
+        self.conv2 = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
+        self.conv_sc = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=1, padding=0), eps=1e-4)
+        self.activation = nn.ReLU()
+        self.downsample = downsample
+    
+    def shortcut(self, x):
+        if self.downsample:
+            x = F.avg_pool2d(x, 2)
+        return self.conv_sc(x)
+    
+    def forward(self, in_feat):
+        x = in_feat
+        x = self.activation(self.conv1(x))
+        x = self.conv2(x)
+        if self.downsample:
+            x = F.avg_pool2d(x, 2)
+        return x + self.shortcut(in_feat)
+
 
 
 class PSPModule(nn.Module):

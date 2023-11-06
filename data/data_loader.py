@@ -1,4 +1,4 @@
-import os, json, glob
+import os, json, glob, random
 from itertools import compress
 
 import torch
@@ -21,8 +21,8 @@ INV_IMAGENET_STD = [1.0 / s for s in IMAGENET_STD]
 
 
 class FireDataset(Dataset):
-    def __init__(self, image_dir, classname_file, image_size=(64, 64),
-                 normalize_images=True, max_samples=None, min_object_size=0.02,
+    def __init__(self, fire_image_dir, non_fire_image_dir, classname_file, image_size=(64, 64),
+                 normalize_images=True, max_samples=None, min_object_size=0.02, max_object_size = 0.8,
                  min_objects_per_image=1, max_objects_per_image=8, left_right_flip=False):
         """
         A PyTorch Dataset for loading self-built fire dataset
@@ -48,6 +48,7 @@ class FireDataset(Dataset):
         self.normalize_images =         normalize_images
         self.left_right_flip =          left_right_flip
         
+        #Tranformation: Resize, ToTensor, Normalize
         self.set_image_size(image_size)
 
         with open(classname_file, 'r') as f:
@@ -58,22 +59,26 @@ class FireDataset(Dataset):
             vocal[name] = idx
         self.vocal = vocal
 
-        image_files = glob.glob(os.path.join(image_dir,"*.jpg"))
-        annotation_files = [(os.path.join(x.split("\\images\\")[0], "annotations", x.split("\\images\\")[1])).split(".jpg")[0]+".json" for x in image_files]
+        fire_image_files = glob.glob(os.path.join(fire_image_dir,"*.jpg"))
+        non_fire_image_files = glob.glob(os.path.join(non_fire_image_dir,"*.jpg")) + glob.glob(os.path.join(non_fire_image_dir,"*.png"))
+        
+        fire_annotation_files = [(os.path.join(x.split("\\fire_images\\")[0], "annotations", x.split("\\fire_images\\")[1])).split(".jpg")[0]+".json" for x in fire_image_files]
+
 
         #Filter out objects that have size less than min_object_size and images with higher number of max_num_objects_per_image
-        filtered_annotation_flag = [True] * len(annotation_files)
+        filtered_annotation_flag = [True] * len(fire_annotation_files)
         annotation_datas = []
-        for idx, annotation_file in enumerate(annotation_files):
+        for idx, annotation_file in enumerate(fire_annotation_files):
             with open(annotation_file, 'r') as jsonf:
                 annotation_data = json.load(jsonf)
             
+            #filtered out objects from min-max size
             img_h, img_w = annotation_data["image_size"]
             objects = annotation_data["objects"]
             new_objects = []
             for object in objects:
                 _, _, w, h = object['bbox']
-                if w*h/(img_w*img_h) > min_object_size:
+                if w*h/(img_w*img_h) > min_object_size and w*h/(img_w*img_h) < max_object_size:
                     new_objects.append(object)
             annotation_data['objects'] = new_objects
 
@@ -83,9 +88,11 @@ class FireDataset(Dataset):
             else:    
                 annotation_datas.append(annotation_data)
         
-        self.annotation_datas = annotation_datas
-        self.image_files = list(compress(image_files,filtered_annotation_flag))
-
+        self.fire_annotation_datas = annotation_datas
+        self.fire_image_files = list(compress(fire_image_files,filtered_annotation_flag))
+        self.non_fire_image_files = non_fire_image_files
+        self.len_fire = len(self.fire_image_files)
+        self.len_non_fire = len(self.non_fire_image_files)
 
     #Setup the input resolution: Resize --> ToTensor --> Normalize (optional)
     def set_image_size(self, image_size):
@@ -99,11 +106,12 @@ class FireDataset(Dataset):
 
     #Length of dataset: number of images
     def __len__(self):
+        len_max = max(self.len_fire, self.len_non_fire)
         if self.max_samples is None:
             if self.left_right_flip:
-                return len(self.image_files)*2
-            return len(self.image_files)
-        return min(len(self.image_files), self.max_samples)
+                return len_max*2
+            return len_max
+        return min(len_max, self.max_samples)
 
     #Function for DataLoader
     def __getitem__(self, index):
@@ -119,48 +127,68 @@ class FireDataset(Dataset):
           (xm, ym, w, h) format, in a [0, 1] coordinate system
         """
         flip = False
-        if index >= len(self.image_files):
-            index = index - len(self.image_files)
+        if index >= max(self.len_fire, self.len_non_fire):
+            index = index - max(self.len_fire, self.len_non_fire)
             flip = True
         
-        image_file      = self.image_files[index]
+        fire_image_file     = self.fire_image_files[index % self.len_fire]
+        non_fire_image_file = self.non_fire_image_files[random.randint(0, self.len_non_fire-1)]    
 
         #Read image
-        with open(image_file, 'rb') as f:
-            with PIL.Image.open(f) as image:
+        with open(fire_image_file, 'rb') as f:
+            with PIL.Image.open(f).convert("RGB") as fire_image:
                 if flip:
-                    image = PIL.ImageOps.mirror(image)
-                WW, HH = image.size
-                
+                    fire_image = PIL.ImageOps.mirror(fire_image)
+                WF, HF = fire_image.size
+        with open(non_fire_image_file, 'rb') as f:
+            with PIL.Image.open(f).convert("RGB") as non_fire_image:
+                if random.random() > 0.5:
+                    non_fire_image = PIL.ImageOps.mirror(non_fire_image)
+                WNF, HNF = non_fire_image.size
+                non_fire_crop = non_fire_image.copy()
 
-        #Read annotation
-        annotation_data = self.annotation_datas[index]
-        objects = annotation_data['objects']
+        #Read annotations: 2 classes [fire, smoke]
+        fire_annotation_data = self.fire_annotation_datas[index % self.len_fire]
+        objects = fire_annotation_data['objects']
+        for object_data in objects:
+            xm, ym, w, h = object_data['bbox']
+            if flip:
+                object_data['bbox'] = [WF - (xm + w), ym, w, h]
 
+        # #TESTING
+        # fire_box = draw_bbox(fire_image.copy(), objects)
+        # fire_box.show()
+
+        #Add noise to non_fire_img at the corresponding positions of fire
+        objects_for_non = objects.copy()
+        for object_data in objects_for_non:
+            xm, ym, w, h = object_data['bbox']
+            xm = int(xm * WNF / WF)
+            ym = int(ym * HNF / HF)
+            w = int((w) * WNF / WF)
+            h = int((h) * HNF / HF)
+            object_data['bbox'] = xm, ym, w, h
+            #create noise
+            noise = np.random.randint(0, 2, (h, w, 1), dtype=np.uint8) * 255
+            noise = np.repeat(noise, repeats=3, axis=2)
+            noise = PIL.Image.fromarray(noise, 'RGB')
+            #Add noise to image
+            non_fire_crop.paste(noise, (xm, ym))
+
+        # #TESTING
+        # non_fire_box = draw_bbox(non_fire_image.copy(), objects)
+        # non_fire_box.show()
+
+        #Assign values to boxes, label for training, testing
         classes, boxes = [], []
-
-        
         for object_data in objects:
             classes.append(object_data['class_id'])
             xm, ym, w, h = object_data['bbox']
-            xm = xm / WW
-            ym = ym / HH
-            w = (w) / WW
-            h = (h) / HH
-            if flip:
-                xm = 1 - (xm + w)
+            xm = xm / WF
+            ym = ym / HF
+            w = (w) / WF
+            h = (h) / HF
             boxes.append(np.array([xm, ym, w, h]))
-
-        # used_boxes = np.array(boxes)
-        # used_boxes[:][0::2] = used_boxes[:][0::2] * WW
-        # used_boxes[:][1::2] = used_boxes[:][1::2] * HH
-        # used_boxes = np.array(used_boxes, dtype=np.int32)
-        # used_image = image.copy()
-        # for i, box in enumerate(used_boxes):
-        #     w, h = box[2:4]
-        #     noise = np.array(np.random.rand(h,w) * 255, dtype=np.uint8)
-        #     noise = np.expand_dims(noise, axis=2)
-
 
         # If less then 8 objects, add 0 class_id and unused bbox --> then add the background as 8th object
         for idx in range(len(objects), self.max_objects_per_image):
@@ -175,8 +203,25 @@ class FireDataset(Dataset):
 
         classes = torch.LongTensor(classes)
         boxes = np.vstack(boxes)
-        image = self.transform(image.convert('RGB'))
-        # print(image.shape, classes.shape, boxes.shape)
+        list_images = [self.transform(x) for x in [fire_image, non_fire_image, non_fire_crop]] #The list [fire_image, non_fire_image, non_fire_crop]
 
-        return image, classes, boxes
+        return list_images, classes, boxes
 
+
+def draw_bbox(image, bboxes):
+    #Initlization
+    draw = PIL.ImageDraw.Draw(image)
+    font = PIL.ImageFont.truetype('arial.ttf', 16)
+    
+    for bbox in bboxes:
+        class_name = 'fire' if bbox['class_id'] == 1 else 'smoke'
+        xmin, ymin, w, h = bbox['bbox']
+        xmax, ymax = xmin + w, ymin + h
+        #draw bbox
+        draw.rectangle([xmin, ymin, xmax, ymax], outline=(255,0,0) if class_name=='fire' else (0,0,255), width=3)
+        #draw class_name
+        text_x = xmin
+        text_y = ymin - 20
+        draw.text((text_x, text_y), class_name, fill=(255,0,0) if class_name=='fire' else (0,0,255), font=font)
+    
+    return image
