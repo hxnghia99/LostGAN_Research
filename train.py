@@ -165,7 +165,7 @@ def main(args):
                 #         non_fire_images[idb][:, xmin:xmax, ymin:ymax] = 0
                 ssim_loss = ssim(fake_images*0.5+0.5, non_fire_images*0.5+0.5)
 
-                # pixel_loss = l1_loss(fake_images, real_images).mean()
+                pixel_loss = l1_loss(fake_images, non_fire_images).mean()
                 feat_loss = vgg_loss(fake_images, non_fire_images).mean()
 
                 g_loss = g_loss_obj * lamb_obj + g_loss_fake * lamb_img + ssim_loss #+ pixel_loss + feat_loss
@@ -185,7 +185,7 @@ def main(args):
                                                                                                         d_loss_robj.item(),
                                                                                                         d_loss_fobj.item(),
                                                                                                         g_loss_obj.item()))
-                logger.info("             ssim_loss: {:.4f}, feat_loss: {:.4f}".format(ssim_loss.item(), feat_loss.item()))
+                logger.info("             ssim_loss: {:.4f}, pixel_loss: {:.4f}, feat_loss: {:.4f}".format(ssim_loss.item(), pixel_loss.item(), feat_loss.item()))
                 # logger.info("             pixel_loss: {:.4f}, feat_loss: {:.4f}".format(pixel_loss.item(), feat_loss.item()))
 
                 writer.add_image("real images", make_grid(fire_images.cpu().data * 0.5 + 0.5, nrow=4), epoch*len(dataloader) + idx + 1)
