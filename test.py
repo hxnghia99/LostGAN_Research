@@ -20,7 +20,7 @@ def truncted_random(num_o=8, thres=1.0):
     for i in range(num_o):
         for j in range(128):
             while z[0, i, j] > thres or z[0, i, j] < - thres:
-                z[0, i, j] = 0.5#np.random.normal()
+                z[0, i, j] = np.random.normal()
     return z
 
 
@@ -48,7 +48,7 @@ def main(args):
             class_names = [x.split(": ")[1] for x in class_names]
 
     elif args.dataset == 'fire':
-        train_img_dir   = os.path.join(dataset_path, "images")
+        train_img_dir   = os.path.join(dataset_path, "fire_images")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
         num_classes = 4
         train_data = FireDataset(image_dir=train_img_dir, classname_file=classname_file,
@@ -93,11 +93,16 @@ def main(args):
         real_images, label = real_images.cuda(), label.long().unsqueeze(-1).cuda()
         z_obj = torch.from_numpy(truncted_random(num_o=num_o, thres=thres)).float().cuda()
         z_im = torch.from_numpy(truncted_random(num_o=1, thres=thres)).view(1, -1).float().cuda()
-        fake_images = netG.forward(z_img=z_im, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+        fake_images = netG.forward(z_im=z_im, z=z_obj, bbox=bbox.cuda(), y=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+        
         fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fake_images = np.array(fake_images*255, np.uint8)
-        cv2.imshow("Generated", cv2.resize(fake_images, (256, 256)))
-        cv2.imshow("Layout", cv2.resize(layout_img, (256, 256)))
+        real_images = real_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
+        real_images = np.array(real_images*255, np.uint8)
+
+        cv2.imshow("Real", cv2.resize(cv2.cvtColor(real_images, cv2.COLOR_RGB2BGR), (256, 256)))
+        cv2.imshow("Fake", cv2.resize(cv2.cvtColor(fake_images, cv2.COLOR_RGB2BGR), (256, 256)))
+        cv2.imshow("Layout", cv2.resize(cv2.cvtColor(np.array(layout_img, dtype=np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
         if cv2.waitKey() == 'q':
             pass
         
@@ -107,10 +112,10 @@ def main(args):
         cv2.destroyAllWindows()
 
 def draw_layout(label, bbox, size, class_names):
-    temp_img = np.zeros([size[0],size[1],3])
+    temp_img = np.zeros([size[0]+50,size[1]+50,3])
     bbox = (bbox[0]*size[0]).numpy().astype(np.int32)
     label = label[0]
-    num_classes = 184
+    num_classes = len(class_names)
 
     rectangle_hsv_tuples     = [(1.0 * x / num_classes, 1., 1.) for x in range(num_classes)]
     label_hsv_tuples         = [(1.0 * x / num_classes, 1., 1.) for x in range(int(num_classes/2), num_classes)] 
@@ -120,12 +125,13 @@ def draw_layout(label, bbox, size, class_names):
     rand_text_colors         = list(map(lambda x: colorsys.hsv_to_rgb(*x), label_hsv_tuples))
     rand_text_colors         = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), rand_text_colors))
     
-   
+    
     
     for i in range(len(bbox)):
         bbox_color = rand_rectangle_colors[label[i]]
         label_color = rand_text_colors[label[i]]
         x,y,width,height = bbox[i]
+        x,y =x+25, y+25
         class_name = class_names[label[i]]
         cv2.rectangle(temp_img, (x, y), (x + width, y + height), bbox_color, 1)  # (0, 255, 0) is the color (green), 2 is the thickness
         cv2.putText(temp_img, class_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, bbox_color, 1)
@@ -140,7 +146,7 @@ if __name__ == "__main__":
                         help='training dataset')
     parser.add_argument('--img_size', type=int, default=128,
                         help='test input resolution')
-    parser.add_argument('--model_path', type=str, default="./outputs/model/G_85.pth",
+    parser.add_argument('--model_path', type=str, default="./outputs/model/G_200.pth",
                         help='which epoch to load')
     parser.add_argument('--sample_path', type=str, default='samples',
                         help='path to save generated images')

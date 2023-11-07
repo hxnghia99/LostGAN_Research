@@ -3,6 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+#nn.BatchNorm2D
+class SynchronizedBatchNorm2d(nn.BatchNorm2d):
+    def _check_input_dim(self, input):
+        if input.dim() != 4:
+            raise ValueError('expected 4D input (got {}D input)'
+                             .format(input.dim()))
+        super(SynchronizedBatchNorm2d, self)._check_input_dim(input)
+
+
 #Adaptive instance normalization
 class AdaptiveInstanceNorm2d(nn.Module):
     def __init__(self, num_features, num_w=512, eps=1e-5, momentum=0.1) -> None:
@@ -130,9 +139,10 @@ class SpatialAdaptiveBatchNorm2d(nn.BatchNorm2d):
         #output feature map
         output = F.batch_norm(x, self.running_mean, self.running_var, self.weight, self.bias, self.training or not self.track_running_stats, exponential_average_factor, self.eps)
 
-        b, o, _, _ = bbox.size()
+        b, o, bh, bw = bbox.size()
         _, _, h, w = x.size()
-        bbox = F.interpolate(bbox, size=(h,w), mode="bilinear")
+        if bw != w or bh != h:
+            bbox = F.interpolate(bbox, size=(h,w), mode="bilinear")
         #calculate weight and bias
         weight, bias = self.weight_proj(vector), self.bias_proj(vector)
         weight, bias = weight.view(b, o, -1), bias.view(b, o, -1)
@@ -148,3 +158,43 @@ class SpatialAdaptiveBatchNorm2d(nn.BatchNorm2d):
     def __repr__(self):
         return self.__class__.__name__ + '(' + str(self.num_features) + ')'
     
+
+
+
+class SpatialAdaptiveSynBatchNorm2d(nn.Module):
+    def __init__(self, num_features, num_w=512, batchnorm_func=SynchronizedBatchNorm2d, eps=1e-5, momentum=0.1, affine=False,
+                 track_running_stats=True):
+        super(SpatialAdaptiveSynBatchNorm2d, self).__init__()
+        # projection layer
+        self.num_features = num_features
+        self.weight_proj = nn.utils.spectral_norm(nn.Linear(num_w, num_features))
+        self.bias_proj = nn.utils.spectral_norm(nn.Linear(num_w, num_features))
+        self.batch_norm2d = batchnorm_func(num_features, eps=eps, momentum=momentum,
+                                           affine=affine)
+
+    def forward(self, x, vector, bbox):
+        """
+        :param x: input feature map (b, c, h, w)
+        :param vector: latent vector (b*o, dim_w)
+        :param bbox: bbox map (b, o, h, w)
+        :return:
+        """
+        output = self.batch_norm2d(x)
+
+        b, o, bh, bw = bbox.size()
+        _, _, h, w = x.size()
+        if bh != h or bw != w:
+            bbox = F.interpolate(bbox, size=(h, w), mode='bilinear')
+        # calculate weight and bias
+        weight, bias = self.weight_proj(vector), self.bias_proj(vector)
+
+        weight, bias = weight.view(b, o, -1), bias.view(b, o, -1)
+
+        weight = torch.sum(bbox.unsqueeze(2) * weight.unsqueeze(-1).unsqueeze(-1), dim=1, keepdim=False) / \
+                 (torch.sum(bbox.unsqueeze(2), dim=1, keepdim=False) + 1e-6) + 1
+        bias = torch.sum(bbox.unsqueeze(2) * bias.unsqueeze(-1).unsqueeze(-1), dim=1, keepdim=False) / \
+               (torch.sum(bbox.unsqueeze(2), dim=1, keepdim=False) + 1e-6)
+        return weight * output + bias
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' + str(self.num_features) + ')'

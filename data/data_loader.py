@@ -59,7 +59,7 @@ class FireDataset(Dataset):
         self.vocal = vocal
 
         image_files = glob.glob(os.path.join(image_dir,"*.jpg"))
-        annotation_files = [(os.path.join(x.split("\\images\\")[0], "annotations", x.split("\\images\\")[1])).split(".jpg")[0]+".json" for x in image_files]
+        annotation_files = [(os.path.join(x.split("\\fire_images\\")[0], "annotations", x.split("\\fire_images\\")[1])).split(".jpg")[0]+".json" for x in image_files]
 
         #Filter out objects that have size less than min_object_size and images with higher number of max_num_objects_per_image
         filtered_annotation_flag = [True] * len(annotation_files)
@@ -127,7 +127,7 @@ class FireDataset(Dataset):
 
         #Read image
         with open(image_file, 'rb') as f:
-            with PIL.Image.open(f) as image:
+            with PIL.Image.open(f).convert("RGB") as image:
                 if flip:
                     image = PIL.ImageOps.mirror(image)
                 WW, HH = image.size
@@ -164,14 +164,14 @@ class FireDataset(Dataset):
 
         # If less then 8 objects, add 0 class_id and unused bbox --> then add the background as 8th object
         for idx in range(len(objects), self.max_objects_per_image):
-            # if idx+1 == self.max_objects_per_image:
-            #     classes.append(self.vocal['background'])
-            #     boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
-            # else:    
-            #     classes.append(self.vocal['_None_'])
-            #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-            classes.append(self.vocal['_None_'])
-            boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            if idx+1 == self.max_objects_per_image:
+                classes.append(self.vocal['background'])
+                boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
+            else:    
+                classes.append(self.vocal['_None_'])
+                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            # classes.append(self.vocal['_None_'])
+            # boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
 
         classes = torch.LongTensor(classes)
         boxes = np.vstack(boxes)
