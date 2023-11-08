@@ -21,9 +21,9 @@ INV_IMAGENET_STD = [1.0 / s for s in IMAGENET_STD]
 
 
 class FireDataset(Dataset):
-    def __init__(self, image_dir, classname_file, image_size=(64, 64),
+    def __init__(self, image_dir, class_names, image_size=(64, 64),
                  normalize_images=True, max_samples=None, min_object_size=0.02,
-                 min_objects_per_image=1, max_objects_per_image=8, left_right_flip=False):
+                 min_objects_per_image=1, max_objects_per_image=8, left_right_flip=False, folder=None, filter_only_fire=False):
         """
         A PyTorch Dataset for loading self-built fire dataset
     
@@ -50,17 +50,15 @@ class FireDataset(Dataset):
         
         self.set_image_size(image_size)
 
-        with open(classname_file, 'r') as f:
-            class_names = f.read().splitlines()
-
         vocal = dict()
         for idx, name in enumerate(class_names):
             vocal[name] = idx
         self.vocal = vocal
 
         image_files = glob.glob(os.path.join(image_dir,"*.jpg"))
-        annotation_files = [(os.path.join(x.split("\\fire_images\\")[0], "annotations", x.split("\\fire_images\\")[1])).split(".jpg")[0]+".json" for x in image_files]
-
+        image_files = [x.replace('\\', '/') for x in image_files]
+        annotation_files = [(os.path.join(x.split('/'+folder+'/')[0], "annotations", x.split('/'+folder+'/')[1])).split(".jpg")[0]+".json" for x in image_files]
+        
         #Filter out objects that have size less than min_object_size and images with higher number of max_num_objects_per_image
         filtered_annotation_flag = [True] * len(annotation_files)
         annotation_datas = []
@@ -73,12 +71,16 @@ class FireDataset(Dataset):
             new_objects = []
             for object in objects:
                 _, _, w, h = object['bbox']
-                if w*h/(img_w*img_h) > min_object_size:
-                    new_objects.append(object)
+                if filter_only_fire:
+                    if w*h/(img_w*img_h) > min_object_size and object['class_name'] == 'fire':
+                        new_objects.append(object)
+                else:
+                    if w*h/(img_w*img_h) > min_object_size:
+                        new_objects.append(object)
             annotation_data['objects'] = new_objects
 
             #0 objects or >8 objects --> remove image
-            if len(new_objects)==0 or len(new_objects)>max_objects_per_image:
+            if len(new_objects)<min_objects_per_image or len(new_objects)>max_objects_per_image:
                 filtered_annotation_flag[idx] = False
             else:    
                 annotation_datas.append(annotation_data)

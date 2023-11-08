@@ -42,7 +42,9 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
 def main(args):
     #Configuration setup
     dataset_path =      os.path.join("./datasets", args.dataset)
-    
+    z_dim = 128
+    num_obj = 8
+
     lamb_obj = 1.0
     lamb_img = 0.1
     img_size = (args.img_size, args.img_size)
@@ -50,33 +52,41 @@ def main(args):
     
     if args.dataset == 'coco':
         train_img_dir =     os.path.join(dataset_path, "train2017")
+        val_img_dir =       os.path.join(dataset_path, "val2017")
         instances_json =    os.path.join(dataset_path, "annotations/instances_train2017.json")
-        stuff_json =        os.path.join(dataset_path, "annotations/stuff_train2017.json")
+        val_instances_json =    os.path.join(dataset_path, "annotations/instances_val2017.json")
+        stuff_json =            os.path.join(dataset_path, "annotations/stuff_train2017.json")
+        val_stuff_json =        os.path.join(dataset_path, "annotations/stuff_val2017.json")
+        fire_json =             args.fire_json_path
+        val_fire_json = fire_json.replace("train", "val")
         num_classes = 184
-        num_obj = 8
-        z_dim = 128
-
         train_data = CocoSceneGraphDataset(image_dir=train_img_dir,
                                        instances_json=instances_json,
                                        stuff_json=stuff_json,
+                                       fire_json=fire_json,
                                        stuff_only=True, image_size=img_size, left_right_flip=True)
+        val_data = CocoSceneGraphDataset(image_dir=val_img_dir,
+                                       instances_json=val_instances_json,
+                                       stuff_json=val_stuff_json,
+                                       fire_json=val_fire_json,
+                                       stuff_only=True, image_size=img_size, left_right_flip=False)
 
     elif args.dataset == 'fire':
-        train_img_dir   = os.path.join(dataset_path, "images")
-        classname_file  = os.path.join(dataset_path, "class_names.txt")
-        num_classes = 4
-        num_obj = 8
-        z_dim = 128
-        train_data = FireDataset(image_dir=train_img_dir, classname_file=classname_file,
-                                image_size=img_size, left_right_flip=True)
-
         with open("./datasets/fire/class_names.txt", "r") as f:
             class_names = f.read().splitlines()
+        train_img_dir   = os.path.join(dataset_path, "train_images_A")
+        val_img_dir   = os.path.join(dataset_path, "val_images_A")
+        num_classes = 4
+        train_data = FireDataset(image_dir=train_img_dir, class_names=class_names,
+                                image_size=img_size, left_right_flip=True, folder="train_images_A", filter_only_fire=args.filter_only_fire)
+        val_data = FireDataset(image_dir=val_img_dir, class_names=class_names,
+                                image_size=img_size, left_right_flip=True, folder="val_images_A", filter_only_fire=args.filter_only_fire)
+        
 
     #Training pre-steps: dataloader, model, optimizer
     #Data
-    dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=0)#num_workers=args.num_workers)
-    
+    dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=4)#num_workers=args.num_workers)
+    val_dataloader = torch.utils.data.DataLoader(val_data, batch_size=1, drop_last=True, shuffle=True, num_workers=4)
     #Model
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
     netD = CombineDiscriminator128(num_classes=num_classes).cuda()
@@ -129,7 +139,7 @@ def main(args):
             d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
             #fake image+objects
             z = torch.randn(real_images.size(0), num_obj, z_dim).cuda()     #[batch, num_obj, 128]
-            fake_images = netG(z_img=None, z_obj=z, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
+            fake_images = netG(z_im=None, z=z, bbox=bbox.cuda(), y=label.squeeze(dim=-1))
             d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
             d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
             d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
@@ -174,7 +184,7 @@ def main(args):
         if (epoch + 1) % 5 == 0:
             torch.save(netG.state_dict(), os.path.join(args.out_path, 'model/', 'G_%d.pth' % (epoch+1)))
             
-            for idx, data in enumerate(dataloader):
+            for idx, data in enumerate(val_dataloader):
                 if idx == 0:
                     real_images, label, bbox = data
                     real_images, label, bbox = real_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float()
@@ -183,13 +193,13 @@ def main(args):
                     break
                 
             netG.eval()
-            fake_images = netG.forward(z_img=z_im, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+            fake_images = netG.forward(z_im=z_im, z=z_obj, bbox=bbox.cuda(), y=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
             fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             fake_images = np.array(fake_images*255, np.uint8)
             layout_img = draw_layout(label, bbox, [256,256], class_names)
 
             cv2.imwrite("./samples/"+ 'image_G_%d.png'%(epoch+1), cv2.resize(fake_images, (256, 256)))
-            cv2.imwrite("./samples/"+ 'layout_G_%d.png'%(epoch+1), cv2.resize(layout_img, (256, 256)))
+            cv2.imwrite("./samples/"+ 'layout_G_%d.png'%(epoch+1), cv2.resize(layout_img, (256+50, 256+50)))
 
 
 def draw_layout(label, bbox, size, class_names):
@@ -229,12 +239,16 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset',        type=str,   default="fire",             help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
-    parser.add_argument('--batch_size',     type=int,   default=32,                  help="training batch size. Default: 8")
+    parser.add_argument('--batch_size',     type=int,   default=24,                 help="training batch size. Default: 8")
     parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")
     parser.add_argument('--g_lr',           type=float, default=0.0001,             help="learning rate of generator")
     parser.add_argument('--d_lr',           type=float, default=0.0001,             help="learning rate of discriminator")
     parser.add_argument('--out_path',       type=str,   default="./outputs/",       help="path to output files")
     parser.add_argument('--num_workers',    type=int,   default=1,                  help="Number of workers for dataset parallel processing")
+    parser.add_argument('--filter_only_fire', type=bool, default=True,              help='identify using 2 classes [bkg, fire] (True) or 3 classes [bkg, fire, smoke] (False)')
+    parser.add_argument('--fire_json_path', type=str,  default='./datasets/coco/annotations/fire_train2017.json',              
+                                                                                    help='path to json file of fire dataset, if not used --> '' ')
+                        
     args = parser.parse_args()
     main(args)
 

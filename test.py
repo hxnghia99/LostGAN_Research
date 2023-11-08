@@ -33,12 +33,12 @@ def main(args):
     
     
     if args.dataset == 'coco':
-        train_img_dir =     os.path.join(dataset_path, "val2017")
+        val_img_dir =     os.path.join(dataset_path, "val2017")
         instances_json =    os.path.join(dataset_path, "annotations/instances_val2017.json")
         stuff_json =        os.path.join(dataset_path, "annotations/stuff_val2017.json")
         num_classes = 184
 
-        train_data = CocoSceneGraphDataset(image_dir=train_img_dir,
+        val_data = CocoSceneGraphDataset(image_dir=val_img_dir,
                                        instances_json=instances_json,
                                        stuff_json=stuff_json,
                                        stuff_only=True, image_size=img_size, left_right_flip=False)
@@ -48,20 +48,16 @@ def main(args):
             class_names = [x.split(": ")[1] for x in class_names]
 
     elif args.dataset == 'fire':
-        train_img_dir   = os.path.join(dataset_path, "fire_images")
-        classname_file  = os.path.join(dataset_path, "class_names.txt")
-        num_classes = 4
-        train_data = FireDataset(image_dir=train_img_dir, classname_file=classname_file,
-                                image_size=img_size, left_right_flip=True)
-
         with open("./datasets/fire/class_names.txt", "r") as f:
             class_names = f.read().splitlines()
-
+        val_img_dir   = os.path.join(dataset_path, "val_images_A")
+        num_classes = 4
+        val_data = FireDataset(image_dir=val_img_dir, class_names=class_names,
+                                image_size=img_size, left_right_flip=True, folder="val_images_A", filter_only_fire=args.filter_only_fire)
 
     #Training pre-steps: dataloader, model, optimizer
     #Data
-    dataloader = torch.utils.data.DataLoader(train_data, batch_size=1, drop_last=True, shuffle=False, num_workers=0)#num_workers=args.num_workers)
-
+    dataloader = torch.utils.data.DataLoader(val_data, batch_size=1, drop_last=True, shuffle=False, num_workers=0)#num_workers=args.num_workers)
 
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
 
@@ -146,9 +142,11 @@ if __name__ == "__main__":
                         help='training dataset')
     parser.add_argument('--img_size', type=int, default=128,
                         help='test input resolution')
-    parser.add_argument('--model_path', type=str, default="./outputs/model/G_200.pth",
+    parser.add_argument('--model_path', type=str, default="./outputs/model/G_180.pth",
                         help='which epoch to load')
     parser.add_argument('--sample_path', type=str, default='samples',
                         help='path to save generated images')
+    parser.add_argument('--filter_only_fire', type=bool, default=False,
+                        help='identify using 2 classes [bkg, fire] (True) or 3 classes [bkg, fire, smoke] (False)')
     args = parser.parse_args()
     main(args)

@@ -21,11 +21,11 @@ INV_IMAGENET_STD = [1.0 / s for s in IMAGENET_STD]
 
 
 class CocoSceneGraphDataset(Dataset):
-    def __init__(self, image_dir, instances_json, stuff_json=None,
+    def __init__(self, image_dir, instances_json, stuff_json=None, fire_json=None,
                  stuff_only=True, image_size=(64, 64), mask_size=16,
                  normalize_images=True, max_samples=None,
                  include_relationships=True, min_object_size=0.02,
-                 min_objects_per_image=3, max_objects_per_image=8, left_right_flip=False,
+                 min_objects_per_image=2, max_objects_per_image=8, left_right_flip=False,
                  include_other=False, instance_whitelist=None, stuff_whitelist=None):
         """
         A PyTorch Dataset for loading Coco and Coco-Stuff annotations and converting
@@ -85,6 +85,12 @@ class CocoSceneGraphDataset(Dataset):
             with open(stuff_json, 'r') as f:
                 stuff_data = json.load(f)
 
+        #FIRE
+        fire_data = None
+        if fire_json is not None and fire_json != '':
+            with open(fire_json, 'r') as f:
+                fire_data = json.load(f)
+
         self.image_ids = []
         self.image_id_to_filename = {}
         self.image_id_to_size = {}
@@ -100,12 +106,24 @@ class CocoSceneGraphDataset(Dataset):
             self.image_id_to_filename[image_id] = filename
             self.image_id_to_size[image_id] = (width, height)
 
+        #FIRE
+        if fire_data:
+            for image_data in fire_data['images']:
+                image_id = image_data['id']
+                filename = image_data['file_name']
+                width = image_data['width']
+                height = image_data['height']
+                self.image_ids.append(image_id)
+                self.image_id_to_filename[image_id] = filename
+                self.image_id_to_size[image_id] = (width, height)
+
         #convert obj_name into index
         self.vocab = {
             'object_name_to_idx': {},
             'pred_name_to_idx': {},
         }
         object_idx_to_name = {}
+
         all_instance_categories = []
         for category_data in instances_data['categories']:
             category_id = category_data['id']
@@ -113,6 +131,7 @@ class CocoSceneGraphDataset(Dataset):
             all_instance_categories.append(category_name)
             object_idx_to_name[category_id] = category_name
             self.vocab['object_name_to_idx'][category_name] = category_id
+        
         all_stuff_categories = []
         if stuff_data:
             for category_data in stuff_data['categories']:
@@ -122,12 +141,24 @@ class CocoSceneGraphDataset(Dataset):
                 object_idx_to_name[category_id] = category_name
                 self.vocab['object_name_to_idx'][category_name] = category_id
 
+        #FIRE
+        all_fire_categories = []
+        if fire_data:
+            for category_data in fire_data['categories']:
+                category_name = category_data['name']
+                category_id = category_data['id']
+                all_fire_categories.append(category_name)
+                object_idx_to_name[category_id] = category_name
+                self.vocab['object_name_to_idx'][category_name] = category_id
+
         #Assign category_list
         if instance_whitelist is None:
             instance_whitelist = all_instance_categories
         if stuff_whitelist is None:
             stuff_whitelist = all_stuff_categories
-        category_whitelist = set(instance_whitelist) | set(stuff_whitelist)
+        #FIRE
+        # category_whitelist = set(instance_whitelist) | set(stuff_whitelist) 
+        category_whitelist = set(instance_whitelist) | set(stuff_whitelist)  | set(all_fire_categories)
 
         # Add object data from instances
         self.image_id_to_objects = defaultdict(list)
@@ -160,7 +191,29 @@ class CocoSceneGraphDataset(Dataset):
                 other_ok = object_name != 'other' or include_other
                 if box_ok and category_ok and other_ok and (object_data['iscrowd'] != 1):
                     self.image_id_to_objects[image_id].append(object_data)
+        
+        #FIRE
+        if fire_data:
+            image_ids_with_fire = set()
+            for object_data in fire_data['annotations']:
+                image_id = object_data['image_id']
+                image_ids_with_fire.add(image_id)          #additional
+                _, _, w, h = object_data['bbox']
+                W, H = self.image_id_to_size[image_id]
+                box_area = (w * h) / (W * H)
+                # box_area = object_data['area'] / (W * H)
+                box_ok = box_area > min_object_size
+                object_name = object_idx_to_name[object_data['category_id']]
+                category_ok = object_name in category_whitelist
+                other_ok = object_name != 'other' or include_other
+                if box_ok and category_ok and other_ok and (object_data['iscrowd'] != 1):
+                    self.image_id_to_objects[image_id].append(object_data)
 
+        #FIRE
+        if stuff_data and fire_data:
+            image_ids_with_stuff = image_ids_with_stuff | image_ids_with_fire
+
+        if stuff_data:
             if stuff_only:
                 new_image_ids = []
                 for image_id in self.image_ids:
