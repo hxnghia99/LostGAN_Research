@@ -4,7 +4,6 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import torch
 import torch.nn as nn
-from tensorboardX import SummaryWriter
 from torchvision.utils import make_grid
 import numpy as np
 
@@ -111,8 +110,6 @@ def main(args):
         os.mkdir(args.out_path)
     if not os.path.exists(os.path.join(args.out_path, 'model/')):
         os.mkdir(os.path.join(args.out_path, 'model/'))
-
-    writer = SummaryWriter(os.path.join(args.out_path, 'log'))
     
     logger = setup_logger("lostGAN", args.out_path, 0)
     logger.info(netG)
@@ -176,9 +173,6 @@ def main(args):
                                                                                                         d_loss_fobj.item(),
                                                                                                         g_loss_obj.item()))
                 logger.info("             pixel_loss: {:.4f}, feat_loss: {:.4f}".format(pixel_loss.item(), feat_loss.item()))
-
-                writer.add_image("real images", make_grid(real_images.cpu().data * 0.5 + 0.5, nrow=4), epoch*len(dataloader) + idx + 1)
-                writer.add_image("fake images", make_grid(fake_images.cpu().data * 0.5 + 0.5, nrow=4), epoch*len(dataloader) + idx + 1)
 
         # save model
         if (epoch + 1) % 5 == 0:
