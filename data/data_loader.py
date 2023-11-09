@@ -190,6 +190,12 @@ class FireDataset(Dataset):
             h = (h) / HF
             boxes.append(np.array([xm, ym, w, h]))
 
+        #make weight for background / fire_region
+        image_weight = np.ones((3, self.image_size[0], self.image_size[1]))
+        for box in boxes:
+            xm, ym, w, h = [int(x*self.image_size[0]) for x in box]
+            image_weight[:,xm:xm+w,ym:ym+h] = 0
+
         # If less then 8 objects, add 0 class_id and unused bbox --> then add the background as 8th object
         for idx in range(len(objects), self.max_objects_per_image):
             # if idx+1 == self.max_objects_per_image:

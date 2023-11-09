@@ -207,8 +207,8 @@ def main(args):
             fake_images = np.array(fake_images*255, np.uint8)
             layout_img = draw_layout(label, bbox, [256,256], class_names)
 
-            cv2.imwrite("./samples/"+ 'image_G_%d.png'%(epoch+1), cv2.resize(fake_images, (256, 256)))
-            cv2.imwrite("./samples/"+ 'layout_G_%d.png'%(epoch+1), cv2.resize(layout_img, (256, 256)))
+            cv2.imwrite("./samples/"+ 'image_G_%d.png'%(epoch+1), cv2.resize(cv2.cvtColor(fake_images, cv2.COLOR_RGB2BGR), (256, 256)))
+            cv2.imwrite("./samples/"+ 'layout_G_%d.png'%(epoch+1), cv2.resize(cv2.cvtColor(layout_img, cv2.COLOR_RGB2BGR), (256, 256)))
             netG.train()
 
 def draw_layout(label, bbox, size, class_names):

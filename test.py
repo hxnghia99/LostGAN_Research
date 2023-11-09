@@ -67,15 +67,10 @@ def main(args):
 
     if not os.path.isfile(args.model_path):
         raise FileNotFoundError("Not found model on provided path: {}".format(args.model_path))
+    
     state_dict = torch.load(args.model_path)
-
-    new_state_dict = OrderedDict()
-    for k, v in state_dict.items():
-        name = k[7:]  # remove `module.`nvidia
-        new_state_dict[name] = v
-
     model_dict = netG.state_dict()
-    pretrained_dict = {k: v for k, v in new_state_dict.items() if k in model_dict}
+    pretrained_dict = {k: v for k, v in state_dict.items() if k in model_dict}
     model_dict.update(pretrained_dict)
     netG.load_state_dict(model_dict)
 
