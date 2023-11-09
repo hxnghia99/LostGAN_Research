@@ -53,7 +53,7 @@ def main(args):
         val_img_dir   = os.path.join(dataset_path, "val_images_A")
         num_classes = 4
         val_data = FireDataset(image_dir=val_img_dir, class_names=class_names,
-                                image_size=img_size, left_right_flip=True, folder="val_images_A", filter_only_fire=args.filter_only_fire)
+                                image_size=img_size, left_right_flip=False, folder="val_images_A", filter_only_fire=args.filter_only_fire)
 
     #Training pre-steps: dataloader, model, optimizer
     #Data
@@ -63,15 +63,10 @@ def main(args):
 
     if not os.path.isfile(args.model_path):
         raise FileNotFoundError("Not found model on provided path: {}".format(args.model_path))
+    
     state_dict = torch.load(args.model_path)
-
-    new_state_dict = OrderedDict()
-    for k, v in state_dict.items():
-        name = k[7:]  # remove `module.`nvidia
-        new_state_dict[name] = v
-
     model_dict = netG.state_dict()
-    pretrained_dict = {k: v for k, v in new_state_dict.items() if k in model_dict}
+    pretrained_dict = {k: v for k, v in state_dict.items() if k in model_dict}
     model_dict.update(pretrained_dict)
     netG.load_state_dict(model_dict)
 
@@ -142,7 +137,7 @@ if __name__ == "__main__":
                         help='training dataset')
     parser.add_argument('--img_size', type=int, default=128,
                         help='test input resolution')
-    parser.add_argument('--model_path', type=str, default="./outputs/model/G_180.pth",
+    parser.add_argument('--model_path', type=str, default="./outputs/model/G_200.pth",
                         help='which epoch to load')
     parser.add_argument('--sample_path', type=str, default='samples',
                         help='path to save generated images')
