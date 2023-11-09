@@ -1,4 +1,4 @@
-import os, json, glob, random
+import os, json, glob, random, copy
 from itertools import compress
 
 import torch
@@ -60,9 +60,11 @@ class FireDataset(Dataset):
         self.vocal = vocal
 
         fire_image_files = glob.glob(os.path.join(fire_image_dir,"*.jpg"))
+        fire_image_files = [x.replace("\\", '/') for x in fire_image_files]
         non_fire_image_files = glob.glob(os.path.join(non_fire_image_dir,"*.jpg")) + glob.glob(os.path.join(non_fire_image_dir,"*.png"))
-        
-        fire_annotation_files = [(os.path.join(x.split("\\fire_images\\")[0], "annotations", x.split("\\fire_images\\")[1])).split(".jpg")[0]+".json" for x in fire_image_files]
+        non_fire_image_files = [x.replace("\\", '/') for x in non_fire_image_files]
+        mode = 'train' if 'train' in fire_image_files[0] else 'val'
+        fire_annotation_files = [(x.split(mode+"_images_A")[0] + "annotations" + x.split(mode+"_images_A")[1]).split(".jpg")[0]+".json" for x in fire_image_files]
 
 
         #Filter out objects that have size less than min_object_size and images with higher number of max_num_objects_per_image
@@ -157,10 +159,11 @@ class FireDataset(Dataset):
 
         # #TESTING
         # fire_box = draw_bbox(fire_image.copy(), objects)
+        # fire_box = fire_box.resize((256, 256))
         # fire_box.show()
 
         #Add noise to non_fire_img at the corresponding positions of fire
-        objects_for_non = objects.copy()
+        objects_for_non = copy.deepcopy(objects)
         for object_data in objects_for_non:
             xm, ym, w, h = object_data['bbox']
             xm = int(xm * WNF / WF)
@@ -194,7 +197,7 @@ class FireDataset(Dataset):
         image_weight = np.ones((3, self.image_size[0], self.image_size[1]))
         for box in boxes:
             xm, ym, w, h = [int(x*self.image_size[0]) for x in box]
-            image_weight[:,xm:xm+w,ym:ym+h] = 0
+            image_weight[:,ym:ym+h,xm:xm+w] = 0
 
         # If less then 8 objects, add 0 class_id and unused bbox --> then add the background as 8th object
         for idx in range(len(objects), self.max_objects_per_image):
@@ -211,7 +214,17 @@ class FireDataset(Dataset):
         boxes = np.vstack(boxes)
         list_images = [self.transform(x) for x in [fire_image, non_fire_image, non_fire_crop]] #The list [fire_image, non_fire_image, non_fire_crop]
 
-        return list_images, classes, boxes
+        # #TEST
+        # test_weight(list_images[0], image_weight)
+
+        return list_images, classes, boxes, image_weight
+
+def test_weight(image, weight):
+    image = np.round((np.array(image)*0.5+0.5)*255).astype(np.uint8)
+    image = image * weight
+    image = PIL.Image.fromarray(np.array(image, np.uint8).transpose(1,2,0))
+    image = image.resize((256,256))
+    image.show()
 
 
 def draw_bbox(image, bboxes):

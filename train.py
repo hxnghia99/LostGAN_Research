@@ -7,7 +7,6 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import torch
 import torch.nn as nn
 # from pytorch_ssim import ssim
-from torchvision.utils import make_grid
 import numpy as np
 
 import cv2
@@ -47,7 +46,11 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
 def main(args):
     #Configuration setup
     dataset_path =      os.path.join("./datasets", args.dataset)
+    mode = args.mode
     
+    num_obj = 8
+    z_dim = 128
+
     lamb_obj = 1.0
     lamb_img = 0.1
     img_size = (args.img_size, args.img_size)
@@ -58,8 +61,6 @@ def main(args):
         instances_json =    os.path.join(dataset_path, "annotations/instances_train2017.json")
         stuff_json =        os.path.join(dataset_path, "annotations/stuff_train2017.json")
         num_classes = 184
-        num_obj = 8
-        z_dim = 128
 
         train_data = CocoSceneGraphDataset(image_dir=train_img_dir,
                                        instances_json=instances_json,
@@ -67,13 +68,13 @@ def main(args):
                                        stuff_only=True, image_size=img_size, left_right_flip=True)
 
     elif args.dataset == 'fire':
-        train_fire_img_dir   = os.path.join(dataset_path, "fire_images")
-        train_non_fire_img_dir   = os.path.join(dataset_path, "non_fire_images")
+        train_fire_img_dir   = os.path.join(dataset_path, mode+"_images_A")
+        train_non_fire_img_dir   = os.path.join(dataset_path, mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
         num_classes = 4
-        num_obj = 8
-        z_dim = 128
-        train_data = FireDataset(fire_image_dir=train_fire_img_dir, non_fire_image_dir=train_non_fire_img_dir, classname_file=classname_file,
+        
+        train_data = FireDataset(fire_image_dir=train_fire_img_dir, non_fire_image_dir=train_non_fire_img_dir, 
+                                classname_file=classname_file,
                                 image_size=img_size, left_right_flip=True)
 
         with open("./datasets/fire/class_names.txt", "r") as f:
@@ -81,7 +82,7 @@ def main(args):
 
     #Training pre-steps: dataloader, model, optimizer
     #Data
-    dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=0)#num_workers=args.num_workers)
+    dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=args.num_workers)
 
     #Model
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
@@ -123,8 +124,8 @@ def main(args):
         netD.train()
 
         for idx, data in enumerate(dataloader):
-            [fire_images, non_fire_images, non_fire_crops], label, bbox = data
-            fire_images, non_fire_crops, label, bbox = fire_images.cuda(), non_fire_crops.cuda(), label.long().cuda().unsqueeze(-1), bbox.float()      #keep bbox in cpu --> make input of netG,netD in gpu
+            [fire_images, non_fire_images, non_fire_crops], label, bbox, image_weight = data
+            fire_images, non_fire_crops, label, bbox, image_weight = fire_images.cuda(), non_fire_crops.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), image_weight.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
             non_fire_images = non_fire_images.cuda()
             # update D network
             netD.zero_grad()
@@ -160,7 +161,7 @@ def main(args):
                         
                 #         fake_images[idb][:, xmin:xmax, ymin:ymax] = 0
                 #         non_fire_images[idb][:, xmin:xmax, ymin:ymax] = 0
-                ssim_loss = ssim(fake_images*0.5+0.5, non_fire_images*0.5+0.5)
+                ssim_loss = ssim((fake_images*0.5+0.5), (non_fire_images*0.5+0.5))
 
                 pixel_loss = l1_loss(fake_images, non_fire_images).mean()
                 feat_loss = vgg_loss(fake_images, non_fire_images).mean()
@@ -246,14 +247,15 @@ def truncted_random(num_o=8, thres=1.0):
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, test")
     parser.add_argument('--dataset',        type=str,   default="fire",             help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
-    parser.add_argument('--batch_size',     type=int,   default=32,                  help="training batch size. Default: 8")
+    parser.add_argument('--batch_size',     type=int,   default=24,                  help="training batch size. Default: 8")
     parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")
     parser.add_argument('--g_lr',           type=float, default=0.0001,             help="learning rate of generator")
     parser.add_argument('--d_lr',           type=float, default=0.0001,             help="learning rate of discriminator")
     parser.add_argument('--out_path',       type=str,   default="./outputs/",       help="path to output files")
-    parser.add_argument('--num_workers',    type=int,   default=1,                  help="Number of workers for dataset parallel processing")
+    parser.add_argument('--num_workers',    type=int,   default=0,                  help="Number of workers for dataset parallel processing")
     args = parser.parse_args()
     main(args)
 

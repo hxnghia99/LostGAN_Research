@@ -1,12 +1,11 @@
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import argparse
 from collections import OrderedDict
 import numpy as np
 import cv2
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from data.cocostuff_loader import CocoSceneGraphDataset
 from data.data_loader import FireDataset
 
@@ -27,7 +26,7 @@ def truncted_random(num_o=8, thres=1.0):
 def main(args):
     #Configuration setup
     dataset_path =      os.path.join("./datasets", args.dataset)
-    
+    mode = args.mode
     img_size = (args.img_size, args.img_size)
     num_o = 8
     
@@ -48,11 +47,13 @@ def main(args):
             class_names = [x.split(": ")[1] for x in class_names]
 
     elif args.dataset == 'fire':
-        train_img_dir   = os.path.join(dataset_path, "images")
+        val_fire_img_dir   = os.path.join(dataset_path, mode+"_images_A")
+        val_non_fire_img_dir   = os.path.join(dataset_path, mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
         num_classes = 4
-        train_data = FireDataset(image_dir=train_img_dir, classname_file=classname_file,
-                                image_size=img_size, left_right_flip=True)
+        train_data = FireDataset(fire_image_dir=val_fire_img_dir, non_fire_image_dir=val_non_fire_img_dir,
+                                classname_file=classname_file,
+                                image_size=img_size, left_right_flip=False)
 
         with open("./datasets/fire/class_names.txt", "r") as f:
             class_names = f.read().splitlines()
@@ -81,7 +82,7 @@ def main(args):
         os.makedirs(args.sample_path)
     thres=2.0
     for idx, data in enumerate(dataloader):
-        real_images, label, bbox = data
+        real_images, label, bbox, image_weight = data
 
         layout_img = draw_layout(label, bbox, [256,256], class_names)
 
@@ -91,8 +92,8 @@ def main(args):
         fake_images = netG.forward(z_img=z_im, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
         fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fake_images = np.array(fake_images*255, np.uint8)
-        cv2.imshow("Generated", cv2.resize(fake_images, (256, 256)))
-        cv2.imshow("Layout", cv2.resize(layout_img, (256, 256)))
+        cv2.imshow("Generated", cv2.resize(cv2.cvtColor(fake_images, cv2.COLOR_RGB2BGR), (256, 256)))
+        cv2.imshow("Layout", cv2.resize(cv2.cvtColor(layout_img, cv2.COLOR_RGB2BGR), (256, 256)))
         if cv2.waitKey() == 'q':
             pass
         
@@ -131,13 +132,11 @@ def draw_layout(label, bbox, size, class_names):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default='fire',
-                        help='training dataset')
-    parser.add_argument('--img_size', type=int, default=128,
-                        help='test input resolution')
-    parser.add_argument('--model_path', type=str, default="./outputs/model/G_85.pth",
-                        help='which epoch to load')
-    parser.add_argument('--sample_path', type=str, default='samples',
-                        help='path to save generated images')
+    parser.add_argument('--mode',           type=str,   default="test",             help="processing phase: train, test")
+    parser.add_argument('--dataset',        type=str,   efault='fire',              help='training dataset')
+    parser.add_argument('--img_size',       type=int,   default=128,                help='test input resolution')
+    parser.add_argument('--model_path',     type=str,   default="./outputs/model/G_85.pth",
+                                                                                    help='which epoch to load')
+    parser.add_argument('--sample_path',    type=str,   default='samples',          help='path to save generated images')
     args = parser.parse_args()
     main(args)
