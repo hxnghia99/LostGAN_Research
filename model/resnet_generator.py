@@ -19,12 +19,12 @@ class ResnetGenerator128(nn.Module):
         self.fc = nn.utils.spectral_norm(nn.Linear(self.z_random_dim, 4*4*16*ch))
 
         #encoder path
-        self.res0 = OptimizedBlock_en(input_dim, ch, downsample=True)
+        self.res0 = OptimizedBlock_en(input_dim, ch, downsample=False)
         self.res1 = ResBlock_en(ch, ch*2, downsample=True)
         self.res2 = ResBlock_en(ch*2, ch*4, downsample=True)
         self.res3 = ResBlock_en(ch*4, ch*8, downsample=True)
         self.res4 = ResBlock_en(ch*8, ch*16, downsample=True)
-        self.res5 = ResBlock_en(ch*16, ch*16, downsample=False)
+        self.res5 = ResBlock_en(ch*16, ch*16, downsample=True)
         self.activation = nn.ReLU()
 
         #decoder path
@@ -115,49 +115,49 @@ class ResnetGenerator128(nn.Module):
         # #4x4
         # x = self.fc(z_img).view(b, -1, 4, 4)        #map [b,128]->[b, 4*4*16*64] --> [b, 1024, 4, 4]
 
-        x = self.res0(z_img)      # 64x64x64
-        x1 = self.res1(x)     # 32x32x128
-        x2 = self.res2(x1)    # 16x16x256
-        x = self.res3(x2)     # 8x8x512
-        x = self.res4(x)      # 4x4x1024
-        x = self.res5(x)      # 4x4x1024
+        x0 = self.res0(z_img)      # 128x128x64
+        x1 = self.res1(x0)     # 64x64x128
+        x2 = self.res2(x1)    # 32x32x256
+        x3 = self.res3(x2)     # 16x16x512
+        x4 = self.res4(x3)      # 8x8x1024
+        x = self.res5(x4)      # 4x4x1024
         x = self.activation(x)  # [batch, 1024, 4, 4]
 
-        #8x8    
+        #8x8x1024    
         x, stage_mask = self.res6(x, latent_vector, bbox_mask)      #[b, 1024, 8, 8]
-        
-        #16x16
+        x = x + x4
+        #16x16x512
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_random, size=(hh, ww), mode='nearest')
         alpha1 = torch.gather(self.sigmoid(self.alpha1).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox = F.interpolate(bbox_mask, size=(hh, ww), mode='bilinear') * (1 - alpha1) + seman_bbox * alpha1
         x, stage_mask = self.res7(x, latent_vector, stage_bbox)
-
-        #32x32
+        x = x + x3
+        #32x32x256
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_random, size=(hh, ww), mode='nearest')
         alpha2 = torch.gather(self.sigmoid(self.alpha2).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox = F.interpolate(bbox_mask, size=(hh, ww), mode='bilinear') * (1 - alpha2) + seman_bbox * alpha2
         x, stage_mask = self.res8(x, latent_vector, stage_bbox)
-
-        #64x64
+        x = x + x2
+        #64x64x128
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_random, size=(hh, ww), mode='nearest')
         alpha3 = torch.gather(self.sigmoid(self.alpha3).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox = F.interpolate(bbox_mask, size=(hh, ww), mode='bilinear') * (1 - alpha3) + seman_bbox * alpha3
         x, stage_mask = self.res9(x, latent_vector, stage_bbox)
-
-        #128x128
+        x = x + x1
+        #128x128x64
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_random, size=(hh, ww), mode='nearest')
         alpha4 = torch.gather(self.sigmoid(self.alpha4).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox = F.interpolate(bbox_mask, size=(hh, ww), mode='bilinear') * (1 - alpha4) + seman_bbox * alpha4
         x, _ = self.res10(x, latent_vector, stage_bbox)
-
+        x = x + x0
         # to RGB
         x = self.final(x)
         return x

@@ -82,14 +82,14 @@ def main(args):
         os.makedirs(args.sample_path)
     thres=2.0
     for idx, data in enumerate(dataloader):
-        real_images, label, bbox, image_weight = data
+        [_, non_fire_images, non_fire_crops], label, bbox, image_weight = data
+        non_fire_crops, label, bbox, image_weight = non_fire_crops.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), image_weight.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
+        non_fire_images = non_fire_images.cuda()
 
         layout_img = draw_layout(label, bbox, [256,256], class_names)
 
-        real_images, label = real_images.cuda(), label.long().unsqueeze(-1).cuda()
         z_obj = torch.from_numpy(truncted_random(num_o=num_o, thres=thres)).float().cuda()
-        z_im = torch.from_numpy(truncted_random(num_o=1, thres=thres)).view(1, -1).float().cuda()
-        fake_images = netG.forward(z_img=z_im, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+        fake_images = netG(z_img=non_fire_crops, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
         fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fake_images = np.array(fake_images*255, np.uint8)
         cv2.imshow("Generated", cv2.resize(cv2.cvtColor(fake_images, cv2.COLOR_RGB2BGR), (256, 256)))

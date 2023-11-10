@@ -151,16 +151,6 @@ def main(args):
                 g_loss_fake = - g_out_fake.mean()
                 g_loss_obj = - g_out_obj.mean()
 
-                # for idb, boxes_data in enumerate(bbox.cuda()):
-                #     label_flag = label[idb].squeeze(1)
-                #     label_flag = label_flag!=0
-                #     boxes_data = boxes_data[label_flag]
-                #     for box_data in boxes_data:
-                #         xmin, ymin, w, h = [int(x.item()) for x in (box_data*128)]
-                #         xmax, ymax = xmin+w, ymin+h
-                        
-                #         fake_images[idb][:, xmin:xmax, ymin:ymax] = 0
-                #         non_fire_images[idb][:, xmin:xmax, ymin:ymax] = 0
                 ssim_loss = ssim((fake_images*0.5+0.5), (non_fire_images*0.5+0.5))
 
                 pixel_loss = l1_loss(fake_images, non_fire_images).mean()
@@ -192,14 +182,9 @@ def main(args):
             
             for idx, data in enumerate(dataloader):
                 if idx == 0:
-                    list_images, label, bbox = data
-                    _, _, non_fire_crops = list_images
-                    non_fire_crops, label, bbox = non_fire_crops.cuda(), label.long().cuda().unsqueeze(-1), bbox.float()
-                    non_fire_crops = non_fire_crops[0:1]
-                    label = label[0:1]
-                    bbox = bbox[0:1]
+                    [_, non_fire_images, non_fire_crops], label, bbox, image_weight = data
+                    non_fire_crops, label, bbox = non_fire_crops[0:1].cuda(), label[0:1].long().cuda().unsqueeze(-1), bbox[0:1].float()
                     z_obj = torch.from_numpy(truncted_random(num_o=8, thres=2.0)).float().cuda()
-                    # z_im = torch.from_numpy(truncted_random(num_o=1, thres=2.0)).view(1, -1).float().cuda()
                     break
                 
             netG.eval()
@@ -209,7 +194,7 @@ def main(args):
             layout_img = draw_layout(label, bbox, [256,256], class_names)
 
             cv2.imwrite("./samples/"+ 'image_G_%d.png'%(epoch+1), cv2.resize(cv2.cvtColor(fake_images, cv2.COLOR_RGB2BGR), (256, 256)))
-            cv2.imwrite("./samples/"+ 'layout_G_%d.png'%(epoch+1), cv2.resize(cv2.cvtColor(layout_img, cv2.COLOR_RGB2BGR), (256, 256)))
+            cv2.imwrite("./samples/"+ 'layout_G_%d.png'%(epoch+1), cv2.resize(cv2.cvtColor(layout_img.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
             netG.train()
 
 def draw_layout(label, bbox, size, class_names):
@@ -250,7 +235,7 @@ if __name__=="__main__":
     parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, test")
     parser.add_argument('--dataset',        type=str,   default="fire",             help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
-    parser.add_argument('--batch_size',     type=int,   default=24,                  help="training batch size. Default: 8")
+    parser.add_argument('--batch_size',     type=int,   default=16,                  help="training batch size. Default: 8")
     parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")
     parser.add_argument('--g_lr',           type=float, default=0.0001,             help="learning rate of generator")
     parser.add_argument('--d_lr',           type=float, default=0.0001,             help="learning rate of discriminator")
