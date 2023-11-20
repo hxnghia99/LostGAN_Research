@@ -23,7 +23,7 @@ INV_IMAGENET_STD = [1.0 / s for s in IMAGENET_STD]
 class FireDataset(Dataset):
     def __init__(self, fire_image_dir, non_fire_image_dir, classname_file, image_size=(64, 64),
                  normalize_images=True, max_samples=None, min_object_size=0.02, max_object_size = 0.8,
-                 min_objects_per_image=1, max_objects_per_image=8, left_right_flip=False):
+                 min_objects_per_image=1, max_objects_per_image=2, left_right_flip=False):
         """
         A PyTorch Dataset for loading self-built fire dataset
     
@@ -78,14 +78,21 @@ class FireDataset(Dataset):
             img_h, img_w = annotation_data["image_size"]
             objects = annotation_data["objects"]
             new_objects = []
+            #keep only the first 'fire' and the the first 'smoke'
+            first_obj = False
+            secnd_obj = False
             for object in objects:
                 _, _, w, h = object['bbox']
                 if w*h/(img_w*img_h) > min_object_size and w*h/(img_w*img_h) < max_object_size:
-                    new_objects.append(object)
+                    if not first_obj and object['class_name']=='fire':
+                        first_obj = True
+                        new_objects.append(object)
+                    elif not secnd_obj and object['class_name']=='smoke':
+                        secnd_obj = True
+                        new_objects.append(object)
             annotation_data['objects'] = new_objects
-
             #0 objects or >8 objects --> remove image
-            if len(new_objects)==0 or len(new_objects)>max_objects_per_image:
+            if len(new_objects)<min_objects_per_image or len(new_objects)>max_objects_per_image:
                 filtered_annotation_flag[idx] = False
             else:    
                 annotation_datas.append(annotation_data)

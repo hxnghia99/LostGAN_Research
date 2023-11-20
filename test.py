@@ -27,7 +27,7 @@ def main(args):
     dataset_path =      os.path.join("./datasets", args.dataset)
     mode = args.mode
     img_size = (args.img_size, args.img_size)
-    num_o = 8
+    num_o = 2
     
     
     if args.dataset == 'coco':
@@ -163,7 +163,7 @@ def draw_layout(label, bbox, size, class_names, temp_img=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, val")
-    parser.add_argument('--dataset',        type=str,   default='fire',              help='training dataset')
+    parser.add_argument('--dataset',        type=str,   default='fire2',              help='training dataset')
     parser.add_argument('--img_size',       type=int,   default=128,                help='test input resolution')
     parser.add_argument('--model_path',     type=str,   default="./outputs/model/G_200.pth",
                                                                                    help='which epoch to load')

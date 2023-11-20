@@ -48,7 +48,7 @@ def main(args):
     dataset_path =      os.path.join("./datasets", args.dataset)
     mode = args.mode
     
-    num_obj = 8
+    num_obj = 2
     z_dim = 128
 
     lamb_obj = 1.0
