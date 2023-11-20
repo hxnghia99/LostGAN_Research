@@ -194,10 +194,10 @@ class FireDataset(Dataset):
             boxes.append(np.array([xm, ym, w, h]))
 
         #make weight for background / fire_region
-        image_weight = np.ones((3, self.image_size[0], self.image_size[1]))
+        weight_map = np.ones((3, self.image_size[0], self.image_size[1]))
         for box in boxes:
             xm, ym, w, h = [int(x*self.image_size[0]) for x in box]
-            image_weight[:,ym:ym+h,xm:xm+w] = 0
+            weight_map[:,ym:ym+h,xm:xm+w] = 0
 
         # If less then 8 objects, add 0 class_id and unused bbox --> then add the background as 8th object
         for idx in range(len(objects), self.max_objects_per_image):
@@ -215,9 +215,9 @@ class FireDataset(Dataset):
         list_images = [self.transform(x) for x in [fire_image, non_fire_image, non_fire_crop]] #The list [fire_image, non_fire_image, non_fire_crop]
 
         # #TEST
-        # test_weight(list_images[0], image_weight)
+        # test_weight(list_images[0], weight_map)
 
-        return list_images, classes, boxes, image_weight
+        return list_images, classes, boxes, weight_map
 
 def test_weight(image, weight):
     image = np.round((np.array(image)*0.5+0.5)*255).astype(np.uint8)

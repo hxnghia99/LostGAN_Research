@@ -1,7 +1,6 @@
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import argparse
-from collections import OrderedDict
 import numpy as np
 import cv2
 
@@ -19,7 +18,7 @@ def truncted_random(num_o=8, thres=1.0):
     for i in range(num_o):
         for j in range(128):
             while z[0, i, j] > thres or z[0, i, j] < - thres:
-                z[0, i, j] = 0.5#np.random.normal()
+                z[0, i, j] = np.random.normal()
     return z
 
 
@@ -46,7 +45,7 @@ def main(args):
             class_names = f.read().split("\n")[0:-1]
             class_names = [x.split(": ")[1] for x in class_names]
 
-    elif args.dataset == 'fire':
+    elif 'fire' in args.dataset:
         val_fire_img_dir   = os.path.join(dataset_path, mode+"_images_A")
         val_non_fire_img_dir   = os.path.join(dataset_path, mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
@@ -55,7 +54,7 @@ def main(args):
                                 classname_file=classname_file,
                                 image_size=img_size, left_right_flip=False)
 
-        with open("./datasets/fire/class_names.txt", "r") as f:
+        with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
             class_names = f.read().splitlines()
 
 
@@ -81,29 +80,54 @@ def main(args):
     if not os.path.exists(args.sample_path):
         os.makedirs(args.sample_path)
     thres=2.0
+    if args.save_results:
+        id_img = 0
     for idx, data in enumerate(dataloader):
-        [_, non_fire_images, non_fire_crops], label, bbox, image_weight = data
-        non_fire_crops, label, bbox, image_weight = non_fire_crops.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), image_weight.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
+        [_, non_fire_images, non_fire_crops], label, bbox, weight_map = data
+        label, bbox, weight_map = label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
         non_fire_images = non_fire_images.cuda()
-
-        layout_img = draw_layout(label, bbox, [256,256], class_names)
+        non_fire_crops = non_fire_crops.cuda()
 
         z_obj = torch.from_numpy(truncted_random(num_o=num_o, thres=thres)).float().cuda()
-        fake_images = netG(z_img=non_fire_crops, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+        fake_images = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
         fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fake_images = np.array(fake_images*255, np.uint8)
+
+        non_fire_images = non_fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
+        non_fire_images = np.array(non_fire_images*255, np.uint8)
+        layout_img = draw_layout(label, bbox, [256,256], class_names, temp_img=non_fire_images)
+
+        non_fire_crops = non_fire_crops[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
+        non_fire_crops = np.array(non_fire_crops*255, np.uint8)
+        
+        cv2.imshow("Input", cv2.resize(cv2.cvtColor(non_fire_crops, cv2.COLOR_RGB2BGR), (256, 256)))
         cv2.imshow("Generated", cv2.resize(cv2.cvtColor(fake_images, cv2.COLOR_RGB2BGR), (256, 256)))
-        cv2.imshow("Layout", cv2.resize(cv2.cvtColor(layout_img, cv2.COLOR_RGB2BGR), (256, 256)))
+        cv2.imshow("Layout", cv2.resize(cv2.cvtColor(np.array(layout_img, dtype=np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
         if cv2.waitKey() == 'q':
             pass
         
-        # cv2.imwrite("{save_path}/sample_{idx}.jpg".format(save_path=args.sample_path, idx=idx),
-        #             fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5)
-
+        if args.save_results:
+            if np.mean(fake_images)>40:
+                id_img+=1
+            
+                if id_img > 300:
+                    continue
+                elif id_img<10:
+                    name = '00'+str(id_img)+'_'
+                elif id_img<100:
+                    name = '0'+str(id_img)+'_'
+                else:
+                    name = str(id_img)+'_'
+                cv2.imwrite("./image_results/01_Fire_LostGAN_noised_input/"+name+"input.png", cv2.cvtColor(np.array(layout_img, dtype=np.uint8), cv2.COLOR_RGB2BGR ))
+                cv2.imwrite("./image_results/01_Fire_LostGAN_noised_input/"+name+"generated_image.png", cv2.resize(cv2.cvtColor(fake_images, cv2.COLOR_RGB2BGR), (256, 256)))
+                
         cv2.destroyAllWindows()
 
-def draw_layout(label, bbox, size, class_names):
-    temp_img = np.zeros([size[0],size[1],3])
+def draw_layout(label, bbox, size, class_names, temp_img=None):
+    if temp_img is None:
+        temp_img = np.zeros([size[0]+50,size[1]+50,3])
+    else:
+        temp_img = cv2.resize(temp_img, size)
     bbox = (bbox[0]*size[0]).numpy().astype(np.int32)
     label = label[0]
     num_classes = 184
@@ -120,23 +144,30 @@ def draw_layout(label, bbox, size, class_names):
     
     for i in range(len(bbox)):
         bbox_color = rand_rectangle_colors[label[i]]
-        label_color = rand_text_colors[label[i]]
+        # label_color = rand_text_colors[label[i]]
+        if label[i] == 1:
+            label_color = (255, 0, 0)
+        elif label[i] == 2:
+            label_color = (0, 0, 255)
+        else:
+            label_color = (0, 255, 0)
         x,y,width,height = bbox[i]
+        # x,y = x+25, y+25
         class_name = class_names[label[i]]
-        cv2.rectangle(temp_img, (x, y), (x + width, y + height), bbox_color, 1)  # (0, 255, 0) is the color (green), 2 is the thickness
-        cv2.putText(temp_img, class_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, bbox_color, 1)
+        cv2.rectangle(temp_img, (x, y), (x + width, y + height), label_color, 1)  # (0, 255, 0) is the color (green), 2 is the thickness
+        cv2.putText(temp_img, class_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, label_color, 1)
 
     return temp_img
     
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode',           type=str,   default="test",             help="processing phase: train, test")
-    parser.add_argument('--dataset',        type=str,   efault='fire',              help='training dataset')
+    parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, val")
+    parser.add_argument('--dataset',        type=str,   default='fire',              help='training dataset')
     parser.add_argument('--img_size',       type=int,   default=128,                help='test input resolution')
-    parser.add_argument('--model_path',     type=str,   default="./outputs/model/G_85.pth",
-                                                                                    help='which epoch to load')
+    parser.add_argument('--model_path',     type=str,   default="./outputs/model/G_200.pth",
+                                                                                   help='which epoch to load')
     parser.add_argument('--sample_path',    type=str,   default='samples',          help='path to save generated images')
+    parser.add_argument('--save_results',   type=bool,   default=False,          help='decide whether saving image results or not')
     args = parser.parse_args()
     main(args)

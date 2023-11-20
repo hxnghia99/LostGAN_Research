@@ -67,7 +67,7 @@ def main(args):
                                        stuff_json=stuff_json,
                                        stuff_only=True, image_size=img_size, left_right_flip=True)
 
-    elif args.dataset == 'fire':
+    elif 'fire' in args.dataset:
         train_fire_img_dir   = os.path.join(dataset_path, mode+"_images_A")
         train_non_fire_img_dir   = os.path.join(dataset_path, mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
@@ -77,7 +77,7 @@ def main(args):
                                 classname_file=classname_file,
                                 image_size=img_size, left_right_flip=True)
 
-        with open("./datasets/fire/class_names.txt", "r") as f:
+        with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
             class_names = f.read().splitlines()
 
     #Training pre-steps: dataloader, model, optimizer
@@ -124,9 +124,9 @@ def main(args):
         netD.train()
 
         for idx, data in enumerate(dataloader):
-            [fire_images, non_fire_images, non_fire_crops], label, bbox, image_weight = data
-            fire_images, non_fire_crops, label, bbox, image_weight = fire_images.cuda(), non_fire_crops.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), image_weight.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
-            non_fire_images = non_fire_images.cuda()
+            [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
+            fire_images, label, bbox, weight_map = fire_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
+            non_fire_images, non_fire_crops = non_fire_images.cuda(),  non_fire_crops.cuda()
             # update D network
             netD.zero_grad()
             #real image+objects
@@ -134,8 +134,8 @@ def main(args):
             d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
             d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
             #fake image+objects
-            z = torch.randn(fire_images.size(0), num_obj, z_dim).cuda()     #[batch, num_obj, 128]
-            fake_images = netG(z_img=non_fire_crops, z_obj=z, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
+            z_obj = torch.randn(fire_images.size(0), num_obj, z_dim).cuda()     #[batch, num_obj, 128]
+            fake_images = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
             d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
             d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
             d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
@@ -151,10 +151,10 @@ def main(args):
                 g_loss_fake = - g_out_fake.mean()
                 g_loss_obj = - g_out_obj.mean()
 
-                ssim_loss = ssim((fake_images*0.5+0.5), (non_fire_images*0.5+0.5))
+                ssim_loss = ssim((fake_images*0.5+0.5)*weight_map, (non_fire_images*0.5+0.5)*weight_map)
 
-                pixel_loss = l1_loss(fake_images, non_fire_images).mean()
-                feat_loss = vgg_loss(fake_images, non_fire_images).mean()
+                pixel_loss = l1_loss(fake_images*weight_map, non_fire_images*weight_map).mean()
+                feat_loss = vgg_loss(fake_images*weight_map, non_fire_images*weight_map).mean()
 
                 g_loss = g_loss_obj * lamb_obj + g_loss_fake * lamb_img + ssim_loss #+ pixel_loss + feat_loss
                 g_loss.backward()
@@ -182,13 +182,15 @@ def main(args):
             
             for idx, data in enumerate(dataloader):
                 if idx == 0:
-                    [_, non_fire_images, non_fire_crops], label, bbox, image_weight = data
-                    non_fire_crops, label, bbox = non_fire_crops[0:1].cuda(), label[0:1].long().cuda().unsqueeze(-1), bbox[0:1].float()
+                    [_, non_fire_images, non_fire_crops], label, bbox, weight_map = data
+                    label, bbox = label[0:1].long().cuda().unsqueeze(-1), bbox[0:1].float(), weight_map[0:1].float().cuda()
+                    non_fire_images = non_fire_images[0:1].cuda()
+                    non_fire_crops = non_fire_crops[0:1].cuda()
                     z_obj = torch.from_numpy(truncted_random(num_o=8, thres=2.0)).float().cuda()
                     break
                 
             netG.eval()
-            fake_images = netG.forward(z_img=non_fire_crops, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+            fake_images = netG.forward(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
             fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             fake_images = np.array(fake_images*255, np.uint8)
             layout_img = draw_layout(label, bbox, [256,256], class_names)
@@ -233,7 +235,7 @@ def truncted_random(num_o=8, thres=1.0):
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, test")
-    parser.add_argument('--dataset',        type=str,   default="fire",             help="dataset used for training")
+    parser.add_argument('--dataset',        type=str,   default="fire2",             help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
     parser.add_argument('--batch_size',     type=int,   default=16,                  help="training batch size. Default: 8")
     parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")
