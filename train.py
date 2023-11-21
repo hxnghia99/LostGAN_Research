@@ -198,7 +198,7 @@ def main(args):
                 g_loss.backward()
                 g_optimizer.step()
 
-            if (idx+1) % 1 == 0:
+            if (idx+1) % 100 == 0:
                 elapsed = time.time() - start_time
                 elapsed = str(datetime.timedelta(seconds=elapsed))
                 logger.info("Time Elapsed: [{}]".format(elapsed))
@@ -217,7 +217,7 @@ def main(args):
                 # logger.info("             pixel_loss: {:.4f}, feat_loss: {:.4f}".format(pixel_loss.item(), feat_loss.item()))
 
         # save model
-        if (epoch + 1) % 100 == 0:
+        if (epoch + 1) % 5 == 0:
             torch.save(netG.state_dict(), os.path.join(args.out_path, 'model/', 'G_%d.pth' % (epoch+1)))
             
             for idx, data in enumerate(dataloader):
