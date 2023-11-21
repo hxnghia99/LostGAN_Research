@@ -183,10 +183,10 @@ def main(args):
             for idx, data in enumerate(dataloader):
                 if idx == 0:
                     [_, non_fire_images, non_fire_crops], label, bbox, weight_map = data
-                    label, bbox = label[0:1].long().cuda().unsqueeze(-1), bbox[0:1].float(), weight_map[0:1].float().cuda()
+                    label, bbox, weight_map = label[0:1].long().cuda().unsqueeze(-1), bbox[0:1].float(), weight_map[0:1].float().cuda()
                     non_fire_images = non_fire_images[0:1].cuda()
                     non_fire_crops = non_fire_crops[0:1].cuda()
-                    z_obj = torch.from_numpy(truncted_random(num_o=8, thres=2.0)).float().cuda()
+                    z_obj = torch.from_numpy(truncted_random(num_o=num_obj, thres=2.0)).float().cuda()
                     break
                 
             netG.eval()
