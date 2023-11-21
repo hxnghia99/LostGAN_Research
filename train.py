@@ -16,8 +16,8 @@ from piqa import SSIM
 from data.cocostuff_loader import CocoSceneGraphDataset
 from data.data_loader import FireDataset
 from model.resnet_generator import ResnetGenerator128
-from model.rcnn_discriminator import CombineDiscriminator128
-from utils.util import VGGLoss
+from model.rcnn_discriminator import CombineDiscriminator128, BkgResnetDiscriminator128
+from utils.util import VGGLoss, draw_layout
 
 class SSIMLoss(SSIM):
     def forward(self, x: Tensor, y: Tensor) -> Tensor:
@@ -48,9 +48,13 @@ def main(args):
     dataset_path =      os.path.join("./datasets", args.dataset)
     mode = args.mode
     
-    num_obj = 2
-    z_dim = 128
+    use_noised_input = False
+    max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
+    get_first_fire_smoke = True if max_num_obj==2 else False
+    
+    use_bkg_net_D = False
 
+    z_dim = 128
     lamb_obj = 1.0
     lamb_img = 0.1
     img_size = (args.img_size, args.img_size)
@@ -75,7 +79,10 @@ def main(args):
         
         train_data = FireDataset(fire_image_dir=train_fire_img_dir, non_fire_image_dir=train_non_fire_img_dir, 
                                 classname_file=classname_file,
-                                image_size=img_size, left_right_flip=True)
+                                image_size=img_size, left_right_flip=True,
+                                max_objects_per_image=max_num_obj,
+                                get_first_fire_smoke=get_first_fire_smoke,
+                                use_noised_input=use_noised_input)
 
         with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
             class_names = f.read().splitlines()
@@ -87,6 +94,8 @@ def main(args):
     #Model
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
     netD = CombineDiscriminator128(num_classes=num_classes).cuda()
+    if use_bkg_net_D:
+        netD2 = BkgResnetDiscriminator128(num_classes=num_classes).cuda()
 
     #Optimizers
     gen_parameters = []
@@ -98,11 +107,20 @@ def main(args):
                 gen_parameters += [{'params': [value], 'lr': g_lr}]
     g_optimizer = torch.optim.Adam(gen_parameters, betas=(0, 0.999))
 
+    #disc: fire/fake-fire
     dis_parameters = []
     for key, value in dict(netD.named_parameters()).items():
         if value.requires_grad:
             dis_parameters += [{'params': [value], 'lr': d_lr}]
     d_optimizer = torch.optim.Adam(dis_parameters, betas=(0, 0.999))
+
+    if use_bkg_net_D:
+        #bkg: non-fire/fake-non-fire
+        dis2_parameters = []
+        for key, value in dict(netD2.named_parameters()).items():
+            if value.requires_grad:
+                dis2_parameters += [{'params': [value], 'lr': d_lr}]
+        d2_optimizer = torch.optim.Adam(dis2_parameters, betas=(0, 0.999))
 
     if not os.path.exists(args.out_path):
         os.mkdir(args.out_path)
@@ -110,11 +128,9 @@ def main(args):
         os.mkdir(os.path.join(args.out_path, 'model/'))
     
     logger = setup_logger("lostGAN", args.out_path, 0)
-    logger.info(netG)
-    logger.info(netD)
+    # logger.info(netG)
+    # logger.info(netD)
 
-
-    #Read from here
     start_time = time.time()
     vgg_loss = VGGLoss()                #average L2-norm between reference and reconstructed
     l1_loss = nn.L1Loss()
@@ -122,6 +138,8 @@ def main(args):
     for epoch in range(args.total_epoch):
         netG.train()
         netD.train()
+        if use_bkg_net_D:
+            netD2.train()
 
         for idx, data in enumerate(dataloader):
             [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
@@ -134,7 +152,7 @@ def main(args):
             d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
             d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
             #fake image+objects
-            z_obj = torch.randn(fire_images.size(0), num_obj, z_dim).cuda()     #[batch, num_obj, 128]
+            z_obj = torch.randn(fire_images.size(0), max_num_obj, z_dim).cuda()     #[batch, num_obj, 128]
             fake_images = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
             d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
             d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
@@ -144,23 +162,43 @@ def main(args):
             d_loss.backward()
             d_optimizer.step()
 
+            if use_bkg_net_D:
+                #update D2 network
+                netD2.zero_grad()
+                #real bkg
+                d2_out_real = netD2(non_fire_crops)
+                d2_loss_real = torch.nn.ReLU()(1.0 - d2_out_real).mean()
+                #fake bkg
+                d2_out_fake = netD2(fake_images.detach()*weight_map)
+                d2_loss_fake = torch.nn.ReLU()(1.0 + d2_out_fake).mean()
+
+                d2_loss = d2_loss_real + d2_loss_fake
+                d2_loss.backward()
+                d2_optimizer.step()
+
             # update G network
             if (idx % 1) == 0:      
                 netG.zero_grad()
                 g_out_fake, g_out_obj = netD(fake_images, bbox.cuda(), label)
                 g_loss_fake = - g_out_fake.mean()
                 g_loss_obj = - g_out_obj.mean()
+                
+                if use_bkg_net_D:
+                    g2_out_fake = netD2(fake_images*weight_map)
+                    g2_loss_fake = - g2_out_fake.mean()
 
                 ssim_loss = ssim((fake_images*0.5+0.5)*weight_map, (non_fire_images*0.5+0.5)*weight_map)
 
                 pixel_loss = l1_loss(fake_images*weight_map, non_fire_images*weight_map).mean()
                 feat_loss = vgg_loss(fake_images*weight_map, non_fire_images*weight_map).mean()
 
-                g_loss = g_loss_obj * lamb_obj + g_loss_fake * lamb_img + ssim_loss #+ pixel_loss + feat_loss
+                g_loss = g_loss_obj * lamb_obj + g_loss_fake * lamb_img + ssim_loss + pixel_loss + feat_loss
+                if use_bkg_net_D:
+                    g_loss += g2_loss_fake
                 g_loss.backward()
                 g_optimizer.step()
 
-            if (idx+1) % 250 == 0:
+            if (idx+1) % 1 == 0:
                 elapsed = time.time() - start_time
                 elapsed = str(datetime.timedelta(seconds=elapsed))
                 logger.info("Time Elapsed: [{}]".format(elapsed))
@@ -174,54 +212,42 @@ def main(args):
                                                                                                         d_loss_fobj.item(),
                                                                                                         g_loss_obj.item()))
                 logger.info("             ssim_loss: {:.4f}, pixel_loss: {:.4f}, feat_loss: {:.4f}".format(ssim_loss.item(), pixel_loss.item(), feat_loss.item()))
+                if use_bkg_net_D:
+                    logger.info("             d2_out_real: {:.4f}, d2_out_fake: {:.4f}, g2_out_fake: {:.4f} ".format(d2_loss_real.item(), d2_loss_fake.item(), g2_loss_fake.item()))
                 # logger.info("             pixel_loss: {:.4f}, feat_loss: {:.4f}".format(pixel_loss.item(), feat_loss.item()))
 
         # save model
-        if (epoch + 1) % 5 == 0:
+        if (epoch + 1) % 100 == 0:
             torch.save(netG.state_dict(), os.path.join(args.out_path, 'model/', 'G_%d.pth' % (epoch+1)))
             
             for idx, data in enumerate(dataloader):
                 if idx == 0:
-                    [_, non_fire_images, non_fire_crops], label, bbox, weight_map = data
+                    [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
                     label, bbox, weight_map = label[0:1].long().cuda().unsqueeze(-1), bbox[0:1].float(), weight_map[0:1].float().cuda()
+                    fire_images = fire_images[0:1].cuda()
                     non_fire_images = non_fire_images[0:1].cuda()
                     non_fire_crops = non_fire_crops[0:1].cuda()
-                    z_obj = torch.from_numpy(truncted_random(num_o=num_obj, thres=2.0)).float().cuda()
+                    z_obj = torch.from_numpy(truncted_random(num_o=max_num_obj, thres=2.0)).float().cuda()
                     break
                 
             netG.eval()
             fake_images = netG.forward(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
             fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             fake_images = np.array(fake_images*255, np.uint8)
-            layout_img = draw_layout(label, bbox, [256,256], class_names)
+            fake_images = draw_layout(label, bbox, [256,256], class_names, fake_images)
+            
+            fire_images = fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
+            fire_images = np.array(fire_images*255, np.uint8)
+            fire_images = draw_layout(label, bbox, [256,256], class_names, fire_images)
 
-            cv2.imwrite("./samples/"+ 'image_G_%d.png'%(epoch+1), cv2.resize(cv2.cvtColor(fake_images, cv2.COLOR_RGB2BGR), (256, 256)))
-            cv2.imwrite("./samples/"+ 'layout_G_%d.png'%(epoch+1), cv2.resize(cv2.cvtColor(layout_img.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+            non_fire_images = non_fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
+            non_fire_images = np.array(non_fire_images*255, np.uint8)
+            non_fire_images = draw_layout(label, bbox, [256,256], class_names, non_fire_images)
+
+            cv2.imwrite("./samples/"+ 'G_%d_real-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+            cv2.imwrite("./samples/"+ 'G_%d_fake-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(fake_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+            cv2.imwrite("./samples/"+ 'G_%d_non-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(non_fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
             netG.train()
-
-def draw_layout(label, bbox, size, class_names):
-    temp_img = np.zeros([size[0]+50,size[1]+50,3])
-    bbox = (bbox[0]*size[0]).numpy().astype(np.int32)
-    label = label[0]
-    num_classes = 184
-
-    rectangle_hsv_tuples     = [(1.0 * x / num_classes, 1., 1.) for x in range(num_classes)]
-    label_hsv_tuples         = [(1.0 * x / num_classes, 1., 1.) for x in range(int(num_classes/2), num_classes)] 
-    label_hsv_tuples        += [(1.0 * x / num_classes, 1., 1.) for x in range(0, int(num_classes/2))]                                
-    rand_rectangle_colors    = list(map(lambda x: colorsys.hsv_to_rgb(*x), rectangle_hsv_tuples))
-    rand_rectangle_colors    = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), rand_rectangle_colors))
-    rand_text_colors         = list(map(lambda x: colorsys.hsv_to_rgb(*x), label_hsv_tuples))
-    rand_text_colors         = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), rand_text_colors))
-    for i in range(len(bbox)):
-        bbox_color = rand_rectangle_colors[label[i]]
-        label_color = rand_text_colors[label[i]]
-        x,y,width,height = bbox[i]
-        x,y = x+25, y+25
-        class_name = class_names[label[i]]
-        cv2.rectangle(temp_img, (x, y), (x + width, y + height), bbox_color, 1)  # (0, 255, 0) is the color (green), 2 is the thickness
-        cv2.putText(temp_img, class_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, bbox_color, 1)
-   
-    return temp_img
 
 
 def truncted_random(num_o=8, thres=1.0):
@@ -237,7 +263,7 @@ if __name__=="__main__":
     parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, test")
     parser.add_argument('--dataset',        type=str,   default="fire2",             help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
-    parser.add_argument('--batch_size',     type=int,   default=16,                  help="training batch size. Default: 8")
+    parser.add_argument('--batch_size',     type=int,   default=8,                  help="training batch size. Default: 8")
     parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")
     parser.add_argument('--g_lr',           type=float, default=0.0001,             help="learning rate of generator")
     parser.add_argument('--d_lr',           type=float, default=0.0001,             help="learning rate of discriminator")

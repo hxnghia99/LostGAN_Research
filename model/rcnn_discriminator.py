@@ -4,6 +4,32 @@ import torch.nn.functional as F
 from torchvision.ops import RoIAlign as ROIAlign
 
 
+class BkgResnetDiscriminator128(nn.Module):
+    def __init__(self, num_classes=0, input_dim=3, ch=64):
+        super(BkgResnetDiscriminator128, self).__init__()
+        self.num_classes = num_classes
+
+        self.block1 = OptimizedBlock(input_dim, ch, downsample=True)
+        self.block2 = ResBlock(ch, ch*2, downsample=True)
+        self.block3 = ResBlock(ch*2, ch*4, downsample=True)
+        self.block4 = ResBlock(ch*4, ch*8, downsample=True)
+        self.block5 = ResBlock(ch*8, ch*16, downsample=True)
+        self.block6 = ResBlock(ch*16, ch*16, downsample=False)
+        self.l7 = nn.utils.spectral_norm(nn.Linear(ch * 16, 1))
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        x = self.block1(x)      # 64x64x64
+        x = self.block2(x)     # 32x32x128
+        x = self.block3(x)    # 16x16x256
+        x = self.block4(x)     # 8x8x512
+        x = self.block5(x)      # 4x4x1024
+        x = self.block6(x)      # 4x4x1024
+        x = self.activation(x)  # [batch, 1024, 4, 4]
+        x = torch.sum(x, dim=(2, 3))    #[batch, 1024]
+        out_im = self.l7(x)     # [batch, 1]
+        return out_im
+
 
 class CombineDiscriminator128(nn.Module):
     def __init__(self, num_classes=81):

@@ -23,7 +23,7 @@ INV_IMAGENET_STD = [1.0 / s for s in IMAGENET_STD]
 class FireDataset(Dataset):
     def __init__(self, fire_image_dir, non_fire_image_dir, classname_file, image_size=(64, 64),
                  normalize_images=True, max_samples=None, min_object_size=0.02, max_object_size = 0.8,
-                 min_objects_per_image=1, max_objects_per_image=2, left_right_flip=False):
+                 min_objects_per_image=1, max_objects_per_image=2, left_right_flip=False, get_first_fire_smoke=False, use_noised_input=False):
         """
         A PyTorch Dataset for loading self-built fire dataset
     
@@ -47,7 +47,7 @@ class FireDataset(Dataset):
         self.max_objects_per_image =    max_objects_per_image
         self.normalize_images =         normalize_images
         self.left_right_flip =          left_right_flip
-        
+        self.use_noised_input =         use_noised_input
         #Tranformation: Resize, ToTensor, Normalize
         self.set_image_size(image_size)
 
@@ -83,15 +83,18 @@ class FireDataset(Dataset):
             secnd_obj = False
             for object in objects:
                 _, _, w, h = object['bbox']
-                if w*h/(img_w*img_h) > min_object_size and w*h/(img_w*img_h) < max_object_size:
-                    if not first_obj and object['class_name']=='fire':
-                        first_obj = True
-                        new_objects.append(object)
-                    elif not secnd_obj and object['class_name']=='smoke':
-                        secnd_obj = True
+                if w*h/(img_w*img_h) > min_object_size and w*h/(img_w*img_h) < max_object_size: #check criterias
+                    if get_first_fire_smoke: #check whether get first fire or not
+                        if not first_obj and object['class_name']=='fire':
+                            first_obj = True
+                            new_objects.append(object)
+                        elif not secnd_obj and object['class_name']=='smoke':
+                            secnd_obj = True
+                            new_objects.append(object)
+                    else:
                         new_objects.append(object)
             annotation_data['objects'] = new_objects
-            #0 objects or >8 objects --> remove image
+            #0 objects or >max objects --> remove image
             if len(new_objects)<min_objects_per_image or len(new_objects)>max_objects_per_image:
                 filtered_annotation_flag[idx] = False
             else:    
@@ -179,9 +182,13 @@ class FireDataset(Dataset):
             h = int((h) * HNF / HF)
             object_data['bbox'] = xm, ym, w, h
             #create noise
-            noise = np.random.randint(0, 2, (h, w, 1), dtype=np.uint8) * 255
-            noise = np.repeat(noise, repeats=3, axis=2)
-            noise = PIL.Image.fromarray(noise, 'RGB')
+            if self.use_noised_input:
+                noise = np.random.randint(0, 2, (h, w, 1), dtype=np.uint8) * 255
+                noise = np.repeat(noise, repeats=3, axis=2)
+                noise = PIL.Image.fromarray(noise, 'RGB')
+            else:
+                noise = np.zeros((h, w, 3), dtype=np.uint8)
+                noise = PIL.Image.fromarray(noise, 'RGB')
             #Add noise to image
             non_fire_crop.paste(noise, (xm, ym))
 
