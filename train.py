@@ -52,7 +52,7 @@ def main(args):
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
     get_first_fire_smoke = True if max_num_obj==2 else False
     
-    use_bkg_net_D = False
+    use_bkg_net_D = True
 
     z_dim = 128
     lamb_obj = 1.0
@@ -126,7 +126,9 @@ def main(args):
         os.mkdir(args.out_path)
     if not os.path.exists(os.path.join(args.out_path, 'model/')):
         os.mkdir(os.path.join(args.out_path, 'model/'))
-    
+    if not os.path.exists(os.path.join(args.out_path, 'samples/')):
+        os.mkdir(os.path.join(args.out_path, 'samples/'))
+
     logger = setup_logger("lostGAN", args.out_path, 0)
     # logger.info(netG)
     # logger.info(netD)
@@ -244,9 +246,9 @@ def main(args):
             non_fire_images = np.array(non_fire_images*255, np.uint8)
             non_fire_images = draw_layout(label, bbox, [256,256], class_names, non_fire_images)
 
-            cv2.imwrite("./samples/"+ 'G_%d_real-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
-            cv2.imwrite("./samples/"+ 'G_%d_fake-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(fake_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
-            cv2.imwrite("./samples/"+ 'G_%d_non-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(non_fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+            cv2.imwrite(args.out_path+"samples/"+ 'G_%d_real-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+            cv2.imwrite(args.out_path+"samples/"+ 'G_%d_fake-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(fake_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+            cv2.imwrite(args.out_path+"samples/"+ 'G_%d_non-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(non_fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
             netG.train()
 
 
@@ -261,7 +263,7 @@ def truncted_random(num_o=8, thres=1.0):
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, test")
-    parser.add_argument('--dataset',        type=str,   default="fire2",             help="dataset used for training")
+    parser.add_argument('--dataset',        type=str,   default="fire3",             help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
     parser.add_argument('--batch_size',     type=int,   default=8,                  help="training batch size. Default: 8")
     parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")

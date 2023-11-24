@@ -6,9 +6,10 @@ from torch.utils.data import Dataset
 import torchvision.transforms as T
 
 import numpy as np
-import PIL
+import PIL, psutil
+import cv2
+from utils.util import draw_layout
 
-import pycocotools.mask as mask_utils
 
 #Constant Parameters
 IMAGENET_MEAN = [0.5, 0.5, 0.5]
@@ -52,10 +53,10 @@ class FireDataset(Dataset):
         self.set_image_size(image_size)
 
         with open(classname_file, 'r') as f:
-            class_names = f.read().splitlines()
+            self.class_names = f.read().splitlines()
 
         vocal = dict()
-        for idx, name in enumerate(class_names):
+        for idx, name in enumerate(self.class_names):
             vocal[name] = idx
         self.vocal = vocal
 
@@ -105,6 +106,7 @@ class FireDataset(Dataset):
         self.non_fire_image_files = non_fire_image_files
         self.len_fire = len(self.fire_image_files)
         self.len_non_fire = len(self.non_fire_image_files)
+
 
     #Setup the input resolution: Resize --> ToTensor --> Normalize (optional)
     def set_image_size(self, image_size):
@@ -160,7 +162,7 @@ class FireDataset(Dataset):
                 non_fire_crop = non_fire_image.copy()
 
         #Read annotations: 2 classes [fire, smoke]
-        fire_annotation_data = self.fire_annotation_datas[index % self.len_fire]
+        fire_annotation_data = copy.deepcopy(self.fire_annotation_datas[index % self.len_fire])
         objects = fire_annotation_data['objects']
         for object_data in objects:
             xm, ym, w, h = object_data['bbox']
@@ -230,6 +232,15 @@ class FireDataset(Dataset):
 
         # #TEST
         # test_weight(list_images[0], weight_map)
+
+        # test_img = test_img.cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
+        # test_img = np.array(test_img*255, np.uint8)
+        # test_img = draw_layout(classes.unsqueeze(0), torch.FloatTensor(boxes).unsqueeze(0), (480,480), self.class_names, input_img=test_img)
+        # cv2.imshow("test img", cv2.cvtColor(test_img.astype(np.uint8), cv2.COLOR_RGB2BGR))
+        # # if index in [2671, 2495, 1062, 2186, 2345, 2538] or index in (np.array([611, 2671, 688, 2495, 1062, 2186, 2345, 2538])+3236):
+        # # print(index, flip)
+        # if cv2.waitKey() == ord('s'):
+        #     print(fire_image_file)
 
         return list_images, classes, boxes, weight_map
 
