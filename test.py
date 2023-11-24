@@ -98,24 +98,37 @@ def main(args):
 
         z_obj = torch.from_numpy(truncted_random(num_o=max_num_obj, thres=thres)).float().cuda()
         fake_images = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+        
+        # fake_fire_crops = fake_images * weight_map
+        
         fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fake_images = np.array(fake_images*255, np.uint8)
-        fake_images = draw_layout(label, bbox, [256,256], class_names, temp_img=fake_images)
+        fake_images = draw_layout(label, bbox, [256,256], class_names, input_img=fake_images)
 
         fire_images = fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fire_images = np.array(fire_images*255, np.uint8)
-        fire_images = draw_layout(label, bbox, [256,256], class_names, temp_img=fire_images)
+        fire_images = draw_layout(label, bbox, [256,256], class_names, input_img=fire_images)
 
         non_fire_images = non_fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         non_fire_images = np.array(non_fire_images*255, np.uint8)
-        non_fire_images = draw_layout(label, bbox, [256,256], class_names, temp_img=non_fire_images)
+        non_fire_images = draw_layout(label, bbox, [256,256], class_names, input_img=non_fire_images)
 
-        non_fire_crops = non_fire_crops[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
-        non_fire_crops = np.array(non_fire_crops*255, np.uint8)
+        # non_fire_crops = non_fire_crops[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
+        # non_fire_crops = np.array(non_fire_crops*255, np.uint8)
+        # non_fire_crops = draw_layout(label, bbox, [256,256], class_names, input_img=non_fire_crops)
+
+        # fake_fire_crops = fake_fire_crops[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
+        # weight_map = weight_map[0].cpu().detach().numpy().transpose(1, 2, 0)
+        # fake_fire_crops = np.array(fake_fire_crops*255, np.uint8) * weight_map
+        # fake_fire_crops = draw_layout(label, bbox, [256,256], class_names, input_img=fake_fire_crops)
+
         
         cv2.imshow("Non-fire", cv2.resize(cv2.cvtColor(non_fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
         cv2.imshow("Fake-fire", cv2.resize(cv2.cvtColor(fake_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
         cv2.imshow("Fire", cv2.resize(cv2.cvtColor(fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+
+        # cv2.imshow("Non-fire-cropped", cv2.resize(cv2.cvtColor(non_fire_crops.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+        # cv2.imshow("Fake-fire-cropped", cv2.resize(cv2.cvtColor(fake_fire_crops.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
         if cv2.waitKey() == 'q':
             pass
         
@@ -139,7 +152,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, val")
-    parser.add_argument('--dataset',        type=str,   default='fire2',              help='training dataset')
+    parser.add_argument('--dataset',        type=str,   default='fire3',              help='training dataset')
     parser.add_argument('--img_size',       type=int,   default=128,                help='test input resolution')
     parser.add_argument('--model_path',     type=str,   default="./outputs/model/G_200.pth",
                                                                                    help='which epoch to load')
