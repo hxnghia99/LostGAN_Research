@@ -93,3 +93,11 @@ def draw_layout(label, bbox, size, class_names, input_img=None):
         cv2.putText(temp_img, class_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, label_color, 1)
 
     return temp_img
+
+
+def create_continuous_map(height, width):
+    y, x = np.ogrid[:height, :width]
+    center_y, center_x = height//2, width//2
+    distances = np.sqrt((y-center_y)**2 + (x-center_x)**2)
+    normalized_distances = distances / np.max(distances)
+    return normalized_distances

@@ -6,9 +6,9 @@ from torch.utils.data import Dataset
 import torchvision.transforms as T
 
 import numpy as np
-import PIL, psutil
+import PIL
 import cv2
-from utils.util import draw_layout
+from utils.util import draw_layout, create_continuous_map
 
 
 #Constant Parameters
@@ -24,7 +24,8 @@ INV_IMAGENET_STD = [1.0 / s for s in IMAGENET_STD]
 class FireDataset(Dataset):
     def __init__(self, fire_image_dir, non_fire_image_dir, classname_file, image_size=(64, 64),
                  normalize_images=True, max_samples=None, min_object_size=0.02, max_object_size = 0.8,
-                 min_objects_per_image=1, max_objects_per_image=2, left_right_flip=False, get_first_fire_smoke=False, use_noised_input=False):
+                 min_objects_per_image=1, max_objects_per_image=2, left_right_flip=False, get_first_fire_smoke=False,
+                 use_noised_input=False, weight_map_type='extreme'):
         """
         A PyTorch Dataset for loading self-built fire dataset
     
@@ -49,6 +50,7 @@ class FireDataset(Dataset):
         self.normalize_images =         normalize_images
         self.left_right_flip =          left_right_flip
         self.use_noised_input =         use_noised_input
+        self.weight_map_type =          weight_map_type
         #Tranformation: Resize, ToTensor, Normalize
         self.set_image_size(image_size)
 
@@ -210,10 +212,20 @@ class FireDataset(Dataset):
             boxes.append(np.array([xm, ym, w, h]))
 
         #make weight for background / fire_region
-        weight_map = np.ones((3, self.image_size[0], self.image_size[1]))
-        for box in boxes:
-            xm, ym, w, h = [int(x*self.image_size[0]) for x in box]
-            weight_map[:,ym:ym+h,xm:xm+w] = 0
+        if self.weight_map_type == 'extreme':
+            weight_map = np.ones((3, self.image_size[0], self.image_size[1]))
+            for box in boxes:
+                xm, ym, w, h = [int(x*self.image_size[0]) for x in box]
+                weight_map[:,ym:ym+h,xm:xm+w] = 0
+        elif self.weight_map_type == 'continuous':
+            weight_map = np.ones((3, self.image_size[0], self.image_size[1]))
+            for box in boxes:
+                xm, ym, w, h = [round(x*self.image_size[0]) for x in box]
+                continuous_map_2d = create_continuous_map(h, w)
+                continuous_map_3d = np.repeat(np.expand_dims(continuous_map_2d, axis=0), repeats=3, axis=0)
+                weight_map[:,ym:ym+h,xm:xm+w] = continuous_map_3d
+        else:
+            raise NotImplemented("Not implement the weight map type as ['extreme', 'continuous'] ...")
 
         # If less then 8 objects, add 0 class_id and unused bbox --> then add the background as 8th object
         for idx in range(len(objects), self.max_objects_per_image):

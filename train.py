@@ -49,6 +49,7 @@ def main(args):
     mode = args.mode
     
     use_noised_input = False
+    weight_map_type = 'continuous'
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
     get_first_fire_smoke = True if max_num_obj==2 else False
     
@@ -82,7 +83,8 @@ def main(args):
                                 image_size=img_size, left_right_flip=True,
                                 max_objects_per_image=max_num_obj,
                                 get_first_fire_smoke=get_first_fire_smoke,
-                                use_noised_input=use_noised_input)
+                                use_noised_input=use_noised_input,
+                                weight_map_type=weight_map_type)
 
         with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
             class_names = f.read().splitlines()
