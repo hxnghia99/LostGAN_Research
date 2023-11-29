@@ -154,7 +154,7 @@ if __name__ == "__main__":
     parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, val")
     parser.add_argument('--dataset',        type=str,   default='fire3',              help='training dataset')
     parser.add_argument('--img_size',       type=int,   default=128,                help='test input resolution')
-    parser.add_argument('--model_path',     type=str,   default="./outputs/model/G_200.pth",
+    parser.add_argument('--model_path',     type=str,   default="./outputs/model/G_200_1.pth",
                                                                                    help='which epoch to load')
     parser.add_argument('--sample_path',    type=str,   default='samples',          help='path to save generated images')
     args = parser.parse_args()
