@@ -10,7 +10,7 @@ from data.data_loader import FireDataset
 
 from model.resnet_generator import ResnetGenerator128
 
-from utils.util import draw_layout
+from utils.util import draw_layout, IS_compute_np
 
 
 def truncted_random(num_o=8, thres=1.0):
@@ -21,6 +21,10 @@ def truncted_random(num_o=8, thres=1.0):
                 z[0, i, j] = np.random.normal()
     return z
 
+def normalize_minmax(img, targe_range):
+    target_min, target_max = targe_range
+    current_min, current_max = img.min(), img.max()
+    return ((img-current_min)/(current_max-current_min))*target_max + target_min
 
 def main(args):
     #Configuration setup
@@ -53,7 +57,7 @@ def main(args):
         val_fire_img_dir   = os.path.join(dataset_path, mode+"_images_A")
         val_non_fire_img_dir   = os.path.join(dataset_path, mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
-        num_classes = 4
+        num_classes = 3
         train_data = FireDataset(fire_image_dir=val_fire_img_dir, non_fire_image_dir=val_non_fire_img_dir,
                                 classname_file=classname_file,
                                 image_size=img_size, left_right_flip=False,
@@ -97,7 +101,7 @@ def main(args):
         non_fire_crops = non_fire_crops.cuda()
 
         z_obj = torch.from_numpy(truncted_random(num_o=max_num_obj, thres=thres)).float().cuda()
-        fake_images = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+        fake_images, stage_masks = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
         
         # fake_fire_crops = fake_images * weight_map
         
@@ -112,6 +116,21 @@ def main(args):
         non_fire_images = non_fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         non_fire_images = np.array(non_fire_images*255, np.uint8)
         non_fire_images = draw_layout(label, bbox, [256,256], class_names, input_img=non_fire_images)
+
+
+        none_mask   = normalize_minmax(stage_masks[0][0:1].cpu().detach().numpy().transpose(1,2,0), [0, 255])
+        none_mask   = draw_layout(label, bbox, [256,256], class_names, input_img=none_mask)
+        fire_mask   = normalize_minmax(stage_masks[0][1:2].cpu().detach().numpy().transpose(1,2,0), [0, 255])
+        fire_mask   = draw_layout(label, bbox, [256,256], class_names, input_img=fire_mask)
+        smoke_mask  = normalize_minmax(stage_masks[0][2:3].cpu().detach().numpy().transpose(1,2,0), [0, 255])
+        smoke_mask  = draw_layout(label, bbox, [256,256], class_names, input_img=smoke_mask)
+        # bkg_mask    = normalize_minmax(stage_masks[0][3:4].cpu().detach().numpy().transpose(1,2,0), [0, 255])
+        # bkg_mask    = draw_layout(label, bbox, [256,256], class_names, input_img=bkg_mask)
+
+        cv2.imshow("None mask", cv2.resize(none_mask.astype(np.uint8), (256, 256)))
+        cv2.imshow("Fire mask", cv2.resize(fire_mask.astype(np.uint8), (256, 256)))
+        cv2.imshow("Smoke mask", cv2.resize(smoke_mask.astype(np.uint8), (256, 256)))
+        # cv2.imshow("Background mask", cv2.resize(bkg_mask.astype(np.uint8), (256, 256)))
 
         # non_fire_crops = non_fire_crops[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         # non_fire_crops = np.array(non_fire_crops*255, np.uint8)
@@ -131,6 +150,15 @@ def main(args):
         # cv2.imshow("Fake-fire-cropped", cv2.resize(cv2.cvtColor(fake_fire_crops.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
         if cv2.waitKey() == 'q':
             pass
+        
+        # from pytorch_gan_metrics import get_inception_score
+        # import torchvision.transforms as T
+        # toten = T.ToTensor()
+        # a = toten(non_fire_images[25:25+256, 25:25+256].astype(np.uint8))
+        # b = toten(fake_images[25:25+256, 25:25+256].astype(np.uint8))
+        # c = toten(fire_images[25:25+256, 25:25+256].astype(np.uint8))
+        # d = torch.concat([a.unsqueeze(0),b.unsqueeze(0),c.unsqueeze(0)], axis=0)
+        # get_inception_score(d)
         
         if save_results:
             if np.mean(fake_images)>40:
@@ -154,7 +182,7 @@ if __name__ == "__main__":
     parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, val")
     parser.add_argument('--dataset',        type=str,   default='fire3',              help='training dataset')
     parser.add_argument('--img_size',       type=int,   default=128,                help='test input resolution')
-    parser.add_argument('--model_path',     type=str,   default="./outputs/model/G_200_1.pth",
+    parser.add_argument('--model_path',     type=str,   default="./outputs/model/G_200.pth",
                                                                                    help='which epoch to load')
     parser.add_argument('--sample_path',    type=str,   default='samples',          help='path to save generated images')
     args = parser.parse_args()

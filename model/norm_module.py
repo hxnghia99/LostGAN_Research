@@ -108,15 +108,15 @@ class SpatialAdaptiveBatchNorm2d(nn.BatchNorm2d):
     def __init__(self, num_features, num_w=512, eps=1e-5, momentum=0.1, affine=False, track_running_stats=True):
         super(SpatialAdaptiveBatchNorm2d, self).__init__(num_features, eps, momentum, affine, track_running_stats)
 
-        #projection layer
+        #projection layer: (d_e + d_obj) x 2C in paper --> 1C for weight, 1C for bias
         self.weight_proj    = nn.Linear(num_w, num_features)        #num_w->in_channels
         self.bias_proj      = nn.Linear(num_w, num_features)   
 
-    def forward(self, x, vector, bbox):
+    def forward(self, x, vector, bbox_class_mask):
         """input arguments:
             - x:        input feature map (b,c,h,w)
             - vector:   latent vector (b*o, dim_w)
-            - bbox:     bbox map (b, o, h, w)
+            - bbox_class_mask:     bbox_class_mask map (b, o, h, w)
         """
         self._check_input_dim(x)
         exponential_average_factor = 0.0
@@ -130,18 +130,18 @@ class SpatialAdaptiveBatchNorm2d(nn.BatchNorm2d):
         #output feature map
         output = F.batch_norm(x, self.running_mean, self.running_var, self.weight, self.bias, self.training or not self.track_running_stats, exponential_average_factor, self.eps)
 
-        b, o, _, _ = bbox.size()
+        b, o, _, _ = bbox_class_mask.size()
         _, _, h, w = x.size()
-        bbox = F.interpolate(bbox, size=(h,w), mode="bilinear")
+        bbox_class_mask = F.interpolate(bbox_class_mask, size=(h,w), mode="bilinear")
         #calculate weight and bias
         weight, bias = self.weight_proj(vector), self.bias_proj(vector)
         weight, bias = weight.view(b, o, -1), bias.view(b, o, -1)
 
-        weight = torch.sum(bbox.unsqueeze(2) * weight.unsqueeze(-1).unsqueeze(-1), dim=1, keepdim=False) / \
-                 (torch.sum(bbox.unsqueeze(2), dim=1, keepdim=False) + 1e-6) \
+        weight = torch.sum(bbox_class_mask.unsqueeze(2) * weight.unsqueeze(-1).unsqueeze(-1), dim=1, keepdim=False) / \
+                 (torch.sum(bbox_class_mask.unsqueeze(2), dim=1, keepdim=False) + 1e-6) \
                  + 1
-        bias =  torch.sum(bbox.unsqueeze(2) * bias.unsqueeze(-1).unsqueeze(-1), dim=1, keepdim=False) / \
-                (torch.sum(bbox.unsqueeze(2), dim=1, keepdim=False) + 1e-6) 
+        bias =  torch.sum(bbox_class_mask.unsqueeze(2) * bias.unsqueeze(-1).unsqueeze(-1), dim=1, keepdim=False) / \
+                (torch.sum(bbox_class_mask.unsqueeze(2), dim=1, keepdim=False) + 1e-6) 
         
         return weight * output + bias
     

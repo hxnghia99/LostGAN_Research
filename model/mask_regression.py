@@ -49,7 +49,7 @@ class MaskRegressNet(nn.Module):
         x = self.conv3(x)                               #output [b*o, 1, 16, 16]     
         x = x.view(b, num_o, 16, 16)            
         #above: an encoding of z_obj_random+z_obj_class
-
+        #not have information bbox
         bbmap = self._masks_to_layout(bbox, x, self.map_size).view(b, num_o, self.map_size, self.map_size)
         return bbmap
 
@@ -69,13 +69,14 @@ class MaskRegressNet(nn.Module):
         if W is None:
             W = H
         
-        grid = self._boxes_to_grid(boxes.view(b*num_o, -1), H, W).float().cuda(device=masks.device)     #an encoding of bboxes 
+        #an encoding of bboxes
+        grid = self._boxes_to_grid(boxes.view(b*num_o, -1), H, W).float().cuda(device=masks.device)     
 
-        img_in = masks.float().view(b*num_o, 1, M, M)
+        img_in = masks.float().view(b*num_o, 1, M, M)   #from conv
         #input: [bo, 1, 16, 16], [bo, 64, 64, 2]
         # output[bo,:,64,64] is interpolated from size-2 vector grid[bo,h,w]
         sampled = F.grid_sample(img_in, grid, mode='bilinear', align_corners=True)
-
+        #only have values at bbox_pos + information of class
         return sampled.view(b, num_o, H, W)
         
 
@@ -105,6 +106,7 @@ class MaskRegressNet(nn.Module):
         Y = Y.expand(num_bo, H, W)
         grid = torch.stack([X, Y], axis=3)  # (num_bo, H, W, 2)
 
-        #Transform grid to scale [-1, 1] --> wrong
+        #Values at bbox_pos in range [0, 1], others <0 or >1
+        #Transform grid to scale [-1, 1]
         grid = grid.mul(2).sub(1)
         return grid

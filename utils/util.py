@@ -4,6 +4,7 @@ import torch.nn as nn
 import cv2
 import colorsys
 import numpy as np
+from torchmetrics.image.inception import InceptionScore
 
 # VGG Features matching
 class Vgg19(torch.nn.Module):
@@ -60,8 +61,9 @@ def draw_layout(label, bbox, size, class_names, input_img=None):
     if input_img is None:
         temp_img = np.zeros([size[0]+50,size[1]+50,3])
     else:
-        temp_img = np.zeros([size[0]+50,size[1]+50,3])
-        input_img = cv2.resize(input_img, size)
+        num_c = input_img.shape[2]
+        temp_img = np.zeros([size[0]+50,size[1]+50,num_c])
+        input_img = np.expand_dims(cv2.resize(input_img, size), axis=-1) if num_c==1 else cv2.resize(input_img, size)
         temp_img[25:25+size[0], 25:25+size[1],:] = input_img
      
     bbox = (bbox[0]*size[0]).numpy().astype(np.int32)
@@ -101,3 +103,13 @@ def create_continuous_map(height, width):
     distances = np.sqrt((y-center_y)**2 + (x-center_x)**2)
     normalized_distances = distances / np.max(distances)
     return normalized_distances
+
+
+def IS_compute_np(img: np.array):
+    img = torch.as_tensor(img)
+    img = img.permute((2,0,1))
+    img = img.unsqueeze(dim=0)
+    inception = InceptionScore()
+    inception.update(img)
+    mean, std_dev = inception.compute()
+    return mean, std_dev

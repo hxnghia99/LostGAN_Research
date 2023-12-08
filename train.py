@@ -10,7 +10,6 @@ import torch.nn as nn
 import numpy as np
 
 import cv2
-import colorsys
 from piqa import SSIM
 
 from data.cocostuff_loader import CocoSceneGraphDataset
@@ -40,7 +39,6 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(formatter)
         logger.addHandler(fh)
-
     return logger
 
 def main(args):
@@ -49,11 +47,11 @@ def main(args):
     mode = args.mode
     
     use_noised_input = False
-    weight_map_type = 'continuous'
+    weight_map_type = 'extreme'
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
     get_first_fire_smoke = True if max_num_obj==2 else False
     
-    use_bkg_net_D = True
+    use_bkg_net_D = False
 
     z_dim = 128
     lamb_obj = 1.0
@@ -76,7 +74,7 @@ def main(args):
         train_fire_img_dir   = os.path.join(dataset_path, mode+"_images_A")
         train_non_fire_img_dir   = os.path.join(dataset_path, mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
-        num_classes = 4
+        num_classes = 3
         
         train_data = FireDataset(fire_image_dir=train_fire_img_dir, non_fire_image_dir=train_non_fire_img_dir, 
                                 classname_file=classname_file,
@@ -106,7 +104,7 @@ def main(args):
             if 'mapping' in key:
                 gen_parameters += [{'params': [value], 'lr': g_lr*0.1}]
             else:
-                gen_parameters += [{'params': [value], 'lr': g_lr}]
+                gen_parameters += [{'params': [value], 'lr': g_lr*0.1}]
     g_optimizer = torch.optim.Adam(gen_parameters, betas=(0, 0.999))
 
     #disc: fire/fake-fire
@@ -157,7 +155,7 @@ def main(args):
             d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
             #fake image+objects
             z_obj = torch.randn(fire_images.size(0), max_num_obj, z_dim).cuda()     #[batch, num_obj, 128]
-            fake_images = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
+            fake_images, _ = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
             d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
             d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
             d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
@@ -235,7 +233,7 @@ def main(args):
                     break
                 
             netG.eval()
-            fake_images = netG.forward(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+            fake_images, _ = netG.forward(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
             fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             fake_images = np.array(fake_images*255, np.uint8)
             fake_images = draw_layout(label, bbox, [256,256], class_names, fake_images)
@@ -264,11 +262,11 @@ def truncted_random(num_o=8, thres=1.0):
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, test")
-    parser.add_argument('--dataset',        type=str,   default="fire3",             help="dataset used for training")
+    parser.add_argument('--mode',           type=str,   default="train",            help="processing phase: train, test")
+    parser.add_argument('--dataset',        type=str,   default="fire3",            help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
-    parser.add_argument('--batch_size',     type=int,   default=8,                  help="training batch size. Default: 8")
-    parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")
+    parser.add_argument('--batch_size',     type=int,   default=16,                 help="training batch size. Default: 8")
+    parser.add_argument('--total_epoch',    type=int,   default=100,                help="numer of total training epochs")
     parser.add_argument('--g_lr',           type=float, default=0.0001,             help="learning rate of generator")
     parser.add_argument('--d_lr',           type=float, default=0.0001,             help="learning rate of discriminator")
     parser.add_argument('--out_path',       type=str,   default="./outputs/",       help="path to output files")
