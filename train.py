@@ -6,8 +6,8 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import torch
 import torch.nn as nn
-# from pytorch_ssim import ssim
 import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
 import cv2
 from piqa import SSIM
@@ -17,6 +17,11 @@ from data.data_loader import FireDataset
 from model.resnet_generator import ResnetGenerator128
 from model.rcnn_discriminator import CombineDiscriminator128, BkgResnetDiscriminator128
 from utils.util import VGGLoss, draw_layout
+
+def add_normal_noise_input_D(images, mean=0, std=0.1):
+    noise = torch.randn_like(images) * std + mean
+    noisy_images = images + noise
+    return noisy_images
 
 class SSIMLoss(SSIM):
     def forward(self, x: Tensor, y: Tensor) -> Tensor:
@@ -51,7 +56,10 @@ def main(args):
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
     get_first_fire_smoke = True if max_num_obj==2 else False
     
+    num_workers = 4 #args.num_workers
+    use_ssim_net_G = False
     use_bkg_net_D = False
+    use_instance_noise_input_D = False
 
     z_dim = 128
     lamb_obj = 1.0
@@ -89,7 +97,7 @@ def main(args):
 
     #Training pre-steps: dataloader, model, optimizer
     #Data
-    dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=args.num_workers)
+    dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=num_workers)
 
     #Model
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
@@ -104,7 +112,7 @@ def main(args):
             if 'mapping' in key:
                 gen_parameters += [{'params': [value], 'lr': g_lr*0.1}]
             else:
-                gen_parameters += [{'params': [value], 'lr': g_lr*0.1}]
+                gen_parameters += [{'params': [value], 'lr': g_lr}]
     g_optimizer = torch.optim.Adam(gen_parameters, betas=(0, 0.999))
 
     #disc: fire/fake-fire
@@ -128,6 +136,13 @@ def main(args):
         os.mkdir(os.path.join(args.out_path, 'model/'))
     if not os.path.exists(os.path.join(args.out_path, 'samples/')):
         os.mkdir(os.path.join(args.out_path, 'samples/'))
+    if not os.path.exists(os.path.join(args.out_path, 'model/log/')):
+        os.mkdir(os.path.join(args.out_path, 'model/log/'))
+
+    #tensorboard summary writer
+    writer  = SummaryWriter(os.path.join(args.out_path, 'model/log/'))
+    global_steps = torch.LongTensor([1]).cuda()
+    steps_per_epochs = len(dataloader)
 
     logger = setup_logger("lostGAN", args.out_path, 0)
     # logger.info(netG)
@@ -142,7 +157,17 @@ def main(args):
         netD.train()
         if use_bkg_net_D:
             netD2.train()
+        else:
+            d2_loss_real = torch.tensor([0])
+            d2_loss_fake = torch.tensor([0])
+            d2_loss = torch.tensor([0])
+            g2_loss_fake = torch.tensor([0])
+        if not use_ssim_net_G:
+            ssim_loss = torch.tensor([0])
 
+        d1_real_img, d1_real_obj, d1_fake_img, d1_fake_obj, d1_all = 0,0,0,0,0
+        d2_real_bkg, d2_fake_bkg, d2_all = 0,0,0
+        g_fake_img, g_fake_obj, g_fake_bkg, g_l1, g_vgg, g_ssim, g_all = 0,0,0,0,0,0,0
         for idx, data in enumerate(dataloader):
             [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
             fire_images, label, bbox, weight_map = fire_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
@@ -150,13 +175,19 @@ def main(args):
             # update D network
             netD.zero_grad()
             #real image+objects
-            d_out_real, d_out_robj = netD(fire_images, bbox.cuda(), label)
+            if use_instance_noise_input_D:
+                d_out_real, d_out_robj = netD(add_normal_noise_input_D(fire_images), bbox.cuda(), label)
+            else:
+                d_out_real, d_out_robj = netD(fire_images, bbox.cuda(), label)
             d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
             d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
             #fake image+objects
             z_obj = torch.randn(fire_images.size(0), max_num_obj, z_dim).cuda()     #[batch, num_obj, 128]
             fake_images, _ = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
-            d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
+            if use_instance_noise_input_D:
+                d_out_fake, d_out_fobj = netD(add_normal_noise_input_D(fake_images.detach()), bbox.cuda(), label)
+            else:
+                d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
             d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
             d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
 
@@ -164,43 +195,92 @@ def main(args):
             d_loss.backward()
             d_optimizer.step()
 
+            writer.add_scalar("iter_d1_loss/d1_real_img", d_loss_real*lamb_img, global_step=global_steps)
+            writer.add_scalar("iter_d1_loss/d1_fake_img", d_loss_fake*lamb_img, global_step=global_steps)
+            writer.add_scalar("iter_d1_loss/d1_real_obj", d_loss_robj*lamb_obj, global_step=global_steps)
+            writer.add_scalar("iter_d1_loss/d1_fake_obj", d_loss_fobj*lamb_obj, global_step=global_steps)
+            writer.add_scalar("iter_d1_loss/d1_total", d_loss, global_step=global_steps)
+            d1_real_img += d_loss_real*lamb_img
+            d1_fake_img += d_loss_fake*lamb_img
+            d1_real_obj += d_loss_robj*lamb_obj
+            d1_fake_obj += d_loss_fobj*lamb_obj
+            d1_all += d_loss
+
             if use_bkg_net_D:
                 #update D2 network
                 netD2.zero_grad()
                 #real bkg
-                d2_out_real = netD2(non_fire_crops)
+                if use_instance_noise_input_D:
+                    d2_out_real = netD2(add_normal_noise_input_D(non_fire_crops))
+                else:
+                    d2_out_real = netD2(non_fire_crops)
                 d2_loss_real = torch.nn.ReLU()(1.0 - d2_out_real).mean()
                 #fake bkg
-                d2_out_fake = netD2(fake_images.detach()*weight_map)
+                if use_instance_noise_input_D:
+                    d2_out_fake = netD2(add_normal_noise_input_D(fake_images.detach()*weight_map))
+                else:
+                    d2_out_fake = netD2(fake_images.detach()*weight_map)
                 d2_loss_fake = torch.nn.ReLU()(1.0 + d2_out_fake).mean()
 
-                d2_loss = d2_loss_real + d2_loss_fake
+                d2_loss = lamb_img * (d2_loss_real + d2_loss_fake)
                 d2_loss.backward()
                 d2_optimizer.step()
+
+            writer.add_scalar("iter_d2_loss/d2_real_bkg", d2_loss_real*lamb_img, global_step=global_steps)
+            writer.add_scalar("iter_d2_loss/d2_fake_bkg", d2_loss_fake*lamb_img, global_step=global_steps)
+            writer.add_scalar("iter_d2_loss/d2_total", d2_loss, global_step=global_steps)
+            d2_real_bkg += d2_loss_real*lamb_img
+            d2_fake_bkg += d2_loss_fake*lamb_img
+            d2_all += d2_loss
 
             # update G network
             if (idx % 1) == 0:      
                 netG.zero_grad()
-                g_out_fake, g_out_obj = netD(fake_images, bbox.cuda(), label)
+                if use_instance_noise_input_D:
+                    g_out_fake, g_out_obj = netD(add_normal_noise_input_D(fake_images), bbox.cuda(), label)
+                else:
+                    g_out_fake, g_out_obj = netD(fake_images, bbox.cuda(), label)
                 g_loss_fake = - g_out_fake.mean()
                 g_loss_obj = - g_out_obj.mean()
                 
                 if use_bkg_net_D:
-                    g2_out_fake = netD2(fake_images*weight_map)
+                    if use_instance_noise_input_D:
+                        g2_out_fake = netD2(add_normal_noise_input_D(fake_images*weight_map))
+                    else:
+                        g2_out_fake = netD2(fake_images*weight_map)
                     g2_loss_fake = - g2_out_fake.mean()
 
-                ssim_loss = ssim((fake_images*0.5+0.5)*weight_map, (non_fire_images*0.5+0.5)*weight_map)
+                if use_ssim_net_G:
+                    ssim_loss = ssim((fake_images*0.5+0.5)*weight_map, (non_fire_images*0.5+0.5)*weight_map)
 
                 pixel_loss = l1_loss(fake_images*weight_map, non_fire_images*weight_map).mean()
                 feat_loss = vgg_loss(fake_images*weight_map, non_fire_images*weight_map).mean()
 
-                g_loss = g_loss_obj * lamb_obj + g_loss_fake * lamb_img + ssim_loss + pixel_loss + feat_loss
+                g_loss = g_loss_obj * lamb_obj + g_loss_fake * lamb_img + pixel_loss + feat_loss 
                 if use_bkg_net_D:
-                    g_loss += g2_loss_fake
+                    g_loss += g2_loss_fake * lamb_img
+                if use_ssim_net_G:
+                    g_loss += ssim_loss
+
                 g_loss.backward()
                 g_optimizer.step()
 
-            if (idx+1) % 100 == 0:
+                writer.add_scalar("iter_g_loss/g_fake_img", g_loss_fake*lamb_img, global_step=global_steps)
+                writer.add_scalar("iter_g_loss/g_fake_obj", g_loss_obj*lamb_obj, global_step=global_steps)
+                writer.add_scalar("iter_g_loss/g_fake_bkg", g2_loss_fake*lamb_img, global_step=global_steps)
+                writer.add_scalar("iter_g_loss/g_l1", pixel_loss, global_step=global_steps)
+                writer.add_scalar("iter_g_loss/g_vgg", feat_loss, global_step=global_steps)
+                writer.add_scalar("iter_g_loss/g_ssim", ssim_loss, global_step=global_steps)
+                writer.add_scalar("iter_g_loss/g_total", g_loss, global_step=global_steps)
+                g_fake_img += g_loss_fake*lamb_img
+                g_fake_obj += g_loss_obj*lamb_obj
+                g_fake_bkg += g2_loss_fake*lamb_img
+                g_l1 += pixel_loss
+                g_vgg += feat_loss
+                g_ssim += ssim_loss
+                g_all += g_loss
+
+            if (idx+1) % 1 == 0:
                 elapsed = time.time() - start_time
                 elapsed = str(datetime.timedelta(seconds=elapsed))
                 logger.info("Time Elapsed: [{}]".format(elapsed))
@@ -217,6 +297,28 @@ def main(args):
                 if use_bkg_net_D:
                     logger.info("             d2_out_real: {:.4f}, d2_out_fake: {:.4f}, g2_out_fake: {:.4f} ".format(d2_loss_real.item(), d2_loss_fake.item(), g2_loss_fake.item()))
                 # logger.info("             pixel_loss: {:.4f}, feat_loss: {:.4f}".format(pixel_loss.item(), feat_loss.item()))
+
+            global_steps += 1
+
+
+        #End of each epoch
+        writer.add_scalar("epoch_d1_loss/d1_real_img", d1_real_img/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_d1_loss/d1_real_obj", d1_real_obj/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_d1_loss/d1_fake_img", d1_fake_img/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_d1_loss/d1_fake_obj", d1_fake_obj/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_d1_loss/d1_total", d1_all/steps_per_epochs, global_step=epoch+1)
+
+        writer.add_scalar("epoch_d2_loss/d2_real_bkg", d2_real_bkg/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_d2_loss/d2_fake_bkg", d2_fake_bkg/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_d2_loss/d2_total", d2_all/steps_per_epochs, global_step=epoch+1)
+
+        writer.add_scalar("epoch_g_loss/g_fake_img", g_fake_img/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_g_loss/g_fake_obj", g_fake_obj/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_g_loss/g_fake_bkg", g_fake_bkg/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_g_loss/g_l1", g_l1/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_g_loss/g_vgg", g_vgg/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_g_loss/g_ssim", g_ssim/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_g_loss/g_total", g_all/steps_per_epochs, global_step=epoch+1)
 
         # save model
         if (epoch + 1) % 5 == 0:
@@ -266,7 +368,7 @@ if __name__=="__main__":
     parser.add_argument('--dataset',        type=str,   default="fire3",            help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
     parser.add_argument('--batch_size',     type=int,   default=16,                 help="training batch size. Default: 8")
-    parser.add_argument('--total_epoch',    type=int,   default=100,                help="numer of total training epochs")
+    parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")
     parser.add_argument('--g_lr',           type=float, default=0.0001,             help="learning rate of generator")
     parser.add_argument('--d_lr',           type=float, default=0.0001,             help="learning rate of discriminator")
     parser.add_argument('--out_path',       type=str,   default="./outputs/",       help="path to output files")

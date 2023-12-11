@@ -41,7 +41,7 @@ class ResnetGenerator128(nn.Module):
                                    
         # mapping function
         mapping = list()
-        self.mappping = nn.Sequential(*mapping)
+        self.mapping = nn.Sequential(*mapping)
 
         self.alpha1 = nn.Parameter(torch.zeros(1, num_classes, 1))
         self.alpha2 = nn.Parameter(torch.zeros(1, num_classes, 1))
@@ -105,7 +105,7 @@ class ResnetGenerator128(nn.Module):
         class_label_embedding = class_label_embedding.view(b*o, -1) #[b*o, 180]
 
         latent_vector = torch.concat((z_obj, class_label_embedding), dim=1).view(b, o, -1)  #[b, o_label, 128+180]
-        latent_vector = self.mappping(latent_vector.view(b*o, -1))      #identity mapping at the momemt
+        latent_vector = self.mapping(latent_vector.view(b*o, -1))      #identity mapping at the momemt
 
         # preprocess bbox -> mask with information of bbox + class: value inside bbox in range [-1, 1], outside 0
         bbox_class_mask = self.mask_regress(latent_vector, bbox)      #encoding latent_vector+bbox --> [b, o_label, H(64), W(64)]
