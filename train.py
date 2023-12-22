@@ -65,6 +65,7 @@ def main(args):
     use_ssim_net_G = False
     use_bkg_net_D = False
     use_instance_noise_input_D = False
+    use_accuracy_constrain_D = True
 
     #Model
     z_dim = 128
@@ -175,38 +176,75 @@ def main(args):
         d1_real_img, d1_real_obj, d1_fake_img, d1_fake_obj, d1_all = 0,0,0,0,0
         d2_real_bkg, d2_fake_bkg, d2_all = 0,0,0
         g_fake_img, g_fake_obj, g_fake_bkg, g_l1, g_vgg, g_ssim, g_all = 0,0,0,0,0,0,0
-        d1_real_acc_cnt, d1_fake_acc_cnt, d1_real_num_sample, d1_fake_num_sample = 0
+        d1_real_acc_cnt, d1_fake_acc_cnt, d1_real_num_sample, d1_fake_num_sample = 0,0,0,0
         for idx, data in enumerate(dataloader):
             [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
             fire_images, label, bbox, weight_map = fire_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
             non_fire_images, non_fire_crops = non_fire_images.cuda(),  non_fire_crops.cuda()
-            # update D network
-            netD.zero_grad()
-            #real image+objects
-            if use_instance_noise_input_D:
-                d_out_real, d_out_robj = netD(add_normal_noise_input_D(fire_images), bbox.cuda(), label)
-            else:
-                d_out_real, d_out_robj = netD(fire_images, bbox.cuda(), label)
-            d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
-            d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
+            
             #fake image+objects
             z_obj = torch.randn(fire_images.size(0), max_num_obj, z_dim).cuda()     #[batch, num_obj, 128]
             fake_images, _ = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
-            if use_instance_noise_input_D:
-                d_out_fake, d_out_fobj = netD(add_normal_noise_input_D(fake_images.detach()), bbox.cuda(), label)
-            else:
-                d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
-            d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
-            d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
+            
+            if use_accuracy_constrain_D:
+                with torch.no_grad():
+                    if use_instance_noise_input_D:
+                        d_out_real, _ = netD(add_normal_noise_input_D(fire_images), bbox.cuda(), label)
+                        d_out_fake, _ = netD(add_normal_noise_input_D(fake_images.detach()), bbox.cuda(), label)
+                    else:
+                        d_out_real, _ = netD(fire_images, bbox.cuda(), label)
+                        d_out_fake, _ = netD(fake_images.detach(), bbox.cuda(), label)
+                    d_target = torch.ones([d_out_real.shape[0],1], dtype=torch.bool).cuda()
+                    d_real_acc_tmp = torch.sum((d_out_real>0) == d_target).item() / d_target.shape[0]
+                    d_fake_acc_tmp = torch.sum((d_out_fake<0) == d_target).item() / d_target.shape[0]
+                if not (d_real_acc_tmp>0.8 and d_fake_acc_tmp>0.8):
+                    # update D network
+                    netD.zero_grad()
+                    #real image+objects
+                    if use_instance_noise_input_D:
+                        d_out_real, d_out_robj = netD(add_normal_noise_input_D(fire_images), bbox.cuda(), label)
+                    else:
+                        d_out_real, d_out_robj = netD(fire_images, bbox.cuda(), label)
+                    d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
+                    d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
+                    
+                    if use_instance_noise_input_D:
+                        d_out_fake, d_out_fobj = netD(add_normal_noise_input_D(fake_images.detach()), bbox.cuda(), label)
+                    else:
+                        d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
+                    d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
+                    d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
 
-            d_loss = lamb_obj * (d_loss_robj + d_loss_fobj) + lamb_img * (d_loss_real + d_loss_fake)
-            d_loss.backward()
-            d_optimizer.step()
+                    d_loss = lamb_obj * (d_loss_robj + d_loss_fobj) + lamb_img * (d_loss_real + d_loss_fake)
+                    d_loss.backward()
+                    d_optimizer.step()
+            
+            if not use_accuracy_constrain_D:
+                # update D network
+                netD.zero_grad()
+                #real image+objects
+                if use_instance_noise_input_D:
+                    d_out_real, d_out_robj = netD(add_normal_noise_input_D(fire_images), bbox.cuda(), label)
+                else:
+                    d_out_real, d_out_robj = netD(fire_images, bbox.cuda(), label)
+                d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
+                d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
+                
+                if use_instance_noise_input_D:
+                    d_out_fake, d_out_fobj = netD(add_normal_noise_input_D(fake_images.detach()), bbox.cuda(), label)
+                else:
+                    d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
+                d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
+                d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
+
+                d_loss = lamb_obj * (d_loss_robj + d_loss_fobj) + lamb_img * (d_loss_real + d_loss_fake)
+                d_loss.backward()
+                d_optimizer.step()
+
 
             d_target = torch.ones([d_out_real.shape[0],1], dtype=torch.bool).cuda()
-            torch.sum((d_out_real>0) == d_target)
             d1_real_acc_cnt += torch.sum((d_out_real>0) == d_target).item()
-            d1_fake_acc_cnt += torch.sum((d_out_real<0) == d_target).item()
+            d1_fake_acc_cnt += torch.sum((d_out_fake<0) == d_target).item()
             d1_real_num_sample += d_out_real.shape[0]
             d1_fake_num_sample += d_out_fake.shape[0]
 
@@ -215,6 +253,7 @@ def main(args):
             writer.add_scalar("iter_d1_loss/d1_real_obj", d_loss_robj*lamb_obj, global_step=global_steps)
             writer.add_scalar("iter_d1_loss/d1_fake_obj", d_loss_fobj*lamb_obj, global_step=global_steps)
             writer.add_scalar("iter_d1_loss/d1_total", d_loss, global_step=global_steps)
+            
             d1_real_img += d_loss_real*lamb_img
             d1_fake_img += d_loss_fake*lamb_img
             d1_real_obj += d_loss_robj*lamb_obj
