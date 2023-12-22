@@ -175,6 +175,7 @@ def main(args):
         d1_real_img, d1_real_obj, d1_fake_img, d1_fake_obj, d1_all = 0,0,0,0,0
         d2_real_bkg, d2_fake_bkg, d2_all = 0,0,0
         g_fake_img, g_fake_obj, g_fake_bkg, g_l1, g_vgg, g_ssim, g_all = 0,0,0,0,0,0,0
+        d1_real_acc_cnt, d1_fake_acc_cnt, d1_real_num_sample, d1_fake_num_sample = 0
         for idx, data in enumerate(dataloader):
             [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
             fire_images, label, bbox, weight_map = fire_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
@@ -201,6 +202,13 @@ def main(args):
             d_loss = lamb_obj * (d_loss_robj + d_loss_fobj) + lamb_img * (d_loss_real + d_loss_fake)
             d_loss.backward()
             d_optimizer.step()
+
+            d_target = torch.ones([d_out_real.shape[0],1], dtype=torch.bool).cuda()
+            torch.sum((d_out_real>0) == d_target)
+            d1_real_acc_cnt += torch.sum((d_out_real>0) == d_target).item()
+            d1_fake_acc_cnt += torch.sum((d_out_real<0) == d_target).item()
+            d1_real_num_sample += d_out_real.shape[0]
+            d1_fake_num_sample += d_out_fake.shape[0]
 
             writer.add_scalar("iter_d1_loss/d1_real_img", d_loss_real*lamb_img, global_step=global_steps)
             writer.add_scalar("iter_d1_loss/d1_fake_img", d_loss_fake*lamb_img, global_step=global_steps)
@@ -326,6 +334,10 @@ def main(args):
         writer.add_scalar("epoch_g_loss/g_vgg", g_vgg/steps_per_epochs, global_step=epoch+1)
         writer.add_scalar("epoch_g_loss/g_ssim", g_ssim/steps_per_epochs, global_step=epoch+1)
         writer.add_scalar("epoch_g_loss/g_total", g_all/steps_per_epochs, global_step=epoch+1)
+
+        writer.add_scalar("epoch_d1_accuracy/d1_real_acc", d1_real_acc_cnt/d1_real_num_sample, global_step=epoch+1)
+        writer.add_scalar("epoch_d1_accuracy/d1_fake_acc", d1_fake_acc_cnt/d1_fake_num_sample, global_step=epoch+1)
+        writer.add_scalar("epoch_d1_accuracy/d1_total_acc", (d1_real_acc_cnt+d1_fake_acc_cnt)/(d1_real_num_sample+d1_fake_num_sample), global_step=epoch+1)
 
         # save model
         if (epoch + 1) % 5 == 0:
