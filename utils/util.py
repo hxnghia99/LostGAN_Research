@@ -57,7 +57,7 @@ class VGGLoss(nn.Module):
 
 
 
-def draw_layout(label, bbox, size, class_names, input_img=None):
+def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=None):
     if input_img is None:
         temp_img = np.zeros([size[0]+50,size[1]+50,3])
     else:
@@ -93,6 +93,13 @@ def draw_layout(label, bbox, size, class_names, input_img=None):
         class_name = class_names[label[i]]
         cv2.rectangle(temp_img, (x, y), (x + width, y + height), label_color, 1)  # (0, 255, 0) is the color (green), 2 is the thickness
         cv2.putText(temp_img, class_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, label_color, 1)
+
+    if D_class_score is not None:
+        if D_class_score>=0:
+            D_class_text = "Real: {}%".format(D_class_score*100)
+        else:
+            D_class_text = "Fake: {}%".format(D_class_score*100)
+        cv2.putText(temp_img, D_class_text, (25,size[1]+50 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
 
     return temp_img
 

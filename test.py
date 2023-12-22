@@ -8,7 +8,7 @@ import torch
 from data.cocostuff_loader import CocoSceneGraphDataset
 from data.data_loader import FireDataset
 
-from model.resnet_generator import ResnetGenerator128
+from model.resnet_generator import ResnetGenerator128, CombineDiscriminator128
 
 from utils.util import draw_layout, IS_compute_np
 
@@ -27,17 +27,20 @@ def normalize_minmax(img, targe_range):
     return ((img-current_min)/(current_max-current_min))*target_max + target_min
 
 def main(args):
-    #Configuration setup
-    dataset_path =      os.path.join("./datasets", args.dataset)
-    mode = args.mode
+    #Common
+    args.mode = 'train'
+    args.G_path = "./outputs/model_test/G_200_switching.pth"
+    args.D_path = ""
     img_size = (args.img_size, args.img_size)
-    
+
+    #Special: Test
     use_noised_input = False
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
     get_first_fire_smoke = True if max_num_obj==2 else False
-    
-    save_results = False
 
+    #Training Initilization
+    save_results = False
+    dataset_path =      os.path.join("./datasets", args.dataset)
     if args.dataset == 'coco':
         train_img_dir =     os.path.join(dataset_path, "val2017")
         instances_json =    os.path.join(dataset_path, "annotations/instances_val2017.json")
@@ -54,8 +57,8 @@ def main(args):
             class_names = [x.split(": ")[1] for x in class_names]
 
     elif 'fire' in args.dataset:
-        val_fire_img_dir   = os.path.join(dataset_path, mode+"_images_A")
-        val_non_fire_img_dir   = os.path.join(dataset_path, mode+"_images_B")
+        val_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_A")
+        val_non_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
         num_classes = 3
         train_data = FireDataset(fire_image_dir=val_fire_img_dir, non_fire_image_dir=val_non_fire_img_dir,
@@ -75,18 +78,27 @@ def main(args):
 
 
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
+    netD = CombineDiscriminator128(num_classes=num_classes).cuda()
 
     if not os.path.isfile(args.model_path):
         raise FileNotFoundError("Not found model on provided path: {}".format(args.model_path))
     
-    state_dict = torch.load(args.model_path)
+    state_dict = torch.load(args.G_path)
     model_dict = netG.state_dict()
     pretrained_dict = {k: v for k, v in state_dict.items() if k in model_dict}
     model_dict.update(pretrained_dict)
     netG.load_state_dict(model_dict)
 
+    state_dict = torch.load(args.D_path)
+    model_dict = netD.state_dict()
+    pretrained_dict = {k: v for k, v in state_dict.items() if k in model_dict}
+    model_dict.update(pretrained_dict)
+    netD.load_state_dict(model_dict)
+
     netG.cuda()
     netG.eval()
+    netD.cuda()
+    netD.eval()
 
     if not os.path.exists(args.sample_path):
         os.makedirs(args.sample_path)
@@ -102,12 +114,15 @@ def main(args):
 
         z_obj = torch.from_numpy(truncted_random(num_o=max_num_obj, thres=thres)).float().cuda()
         fake_images, stage_masks = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
-        
+        g_out_fake, _ = netD(fake_images, bbox.cuda(), label)
+        g_out_fake  = g_out_fake[0,0].cpu().detach()
+        g_out_fake = -1 if g_out_fake<-1 else 1 if g_out_fake>1 else torch.round(g_out_fake,decimals=2)
+
         # fake_fire_crops = fake_images * weight_map
         
         fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fake_images = np.array(fake_images*255, np.uint8)
-        fake_images = draw_layout(label, bbox, [256,256], class_names, input_img=fake_images)
+        fake_images = draw_layout(label, bbox, [256,256], class_names, input_img=fake_images, D_class_score=g_out_fake)
 
         fire_images = fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fire_images = np.array(fire_images*255, np.uint8)
@@ -172,8 +187,8 @@ def main(args):
                     name = '0'+str(id_img)+'_'
                 else:
                     name = str(id_img)+'_'
-                cv2.imwrite("./image_results/01_Fire_LostGAN_noised_input/"+name+"input.png", cv2.cvtColor(np.array(non_fire_images, dtype=np.uint8), cv2.COLOR_RGB2BGR ))
-                cv2.imwrite("./image_results/01_Fire_LostGAN_noised_input/"+name+"generated_image.png", cv2.resize(cv2.cvtColor(fake_images, cv2.COLOR_RGB2BGR), (256, 256)))
+                cv2.imwrite("./image_results/01_Fire_LostGAN/"+name+"input.png", cv2.cvtColor(np.array(non_fire_images, dtype=np.uint8), cv2.COLOR_RGB2BGR ))
+                cv2.imwrite("./image_results/01_Fire_LostGAN/"+name+"generated_image.png", cv2.resize(cv2.cvtColor(fake_images, cv2.COLOR_RGB2BGR), (256, 256)))
                 
         cv2.destroyAllWindows()
 
@@ -182,7 +197,7 @@ if __name__ == "__main__":
     parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, val")
     parser.add_argument('--dataset',        type=str,   default='fire3',              help='training dataset')
     parser.add_argument('--img_size',       type=int,   default=128,                help='test input resolution')
-    parser.add_argument('--model_path',     type=str,   default="./outputs/model/G_200_3.pth",
+    parser.add_argument('--G_path',     type=str,   default="./outputs/model_test/G_200_switching.pth",
                                                                                    help='which epoch to load')
     parser.add_argument('--sample_path',    type=str,   default='samples',          help='path to save generated images')
     args = parser.parse_args()

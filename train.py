@@ -47,26 +47,33 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
     return logger
 
 def main(args):
-    #Configuration setup
-    dataset_path =      os.path.join("./datasets", args.dataset)
-    mode = args.mode
+    '''Configuration setup'''
+    #Common
+    args.mode = 'train'
+    args.batch_size = 16
+    args.total_epoch = 200
+    args.print_freq = 1
+    args.num_workers = 0
+    img_size = (args.img_size, args.img_size)
     
+    #Special : Test
     use_noised_input = False
     weight_map_type = 'extreme'
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
     get_first_fire_smoke = True if max_num_obj==2 else False
     
-    num_workers = 4 #args.num_workers
     use_ssim_net_G = False
     use_bkg_net_D = False
     use_instance_noise_input_D = False
 
+    #Model
     z_dim = 128
     lamb_obj = 1.0
     lamb_img = 0.1
-    img_size = (args.img_size, args.img_size)
     g_lr, d_lr = args.g_lr, args.d_lr
-    
+
+    #Training Initilization
+    dataset_path =      os.path.join("./datasets", args.dataset)
     if args.dataset == 'coco':
         train_img_dir =     os.path.join(dataset_path, "train2017")
         instances_json =    os.path.join(dataset_path, "annotations/instances_train2017.json")
@@ -79,8 +86,8 @@ def main(args):
                                        stuff_only=True, image_size=img_size, left_right_flip=True)
 
     elif 'fire' in args.dataset:
-        train_fire_img_dir   = os.path.join(dataset_path, mode+"_images_A")
-        train_non_fire_img_dir   = os.path.join(dataset_path, mode+"_images_B")
+        train_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_A")
+        train_non_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
         num_classes = 3
         
@@ -97,7 +104,7 @@ def main(args):
 
     #Training pre-steps: dataloader, model, optimizer
     #Data
-    dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=num_workers)
+    dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=args.num_workers)
 
     #Model
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
@@ -113,14 +120,14 @@ def main(args):
                 gen_parameters += [{'params': [value], 'lr': g_lr*0.1}]
             else:
                 gen_parameters += [{'params': [value], 'lr': g_lr}]
-    g_optimizer = torch.optim.Adam(gen_parameters, betas=(0, 0.999))
+    g_optimizer = torch.optim.Adam(gen_parameters, betas=(0.5, 0.999))
 
     #disc: fire/fake-fire
     dis_parameters = []
     for key, value in dict(netD.named_parameters()).items():
         if value.requires_grad:
             dis_parameters += [{'params': [value], 'lr': d_lr}]
-    d_optimizer = torch.optim.Adam(dis_parameters, betas=(0, 0.999))
+    d_optimizer = torch.optim.Adam(dis_parameters, betas=(0.5, 0.999))
 
     if use_bkg_net_D:
         #bkg: non-fire/fake-non-fire
@@ -128,7 +135,7 @@ def main(args):
         for key, value in dict(netD2.named_parameters()).items():
             if value.requires_grad:
                 dis2_parameters += [{'params': [value], 'lr': d_lr}]
-        d2_optimizer = torch.optim.Adam(dis2_parameters, betas=(0, 0.999))
+        d2_optimizer = torch.optim.Adam(dis2_parameters, betas=(0.5, 0.999))
 
     if not os.path.exists(args.out_path):
         os.mkdir(args.out_path)
@@ -240,15 +247,15 @@ def main(args):
                     g_out_fake, g_out_obj = netD(add_normal_noise_input_D(fake_images), bbox.cuda(), label)
                 else:
                     g_out_fake, g_out_obj = netD(fake_images, bbox.cuda(), label)
-                g_loss_fake = - g_out_fake.mean()
-                g_loss_obj = - g_out_obj.mean()
+                g_loss_fake = torch.nn.ReLU()(1.0 - g_out_fake).mean()
+                g_loss_obj = torch.nn.ReLU()(1.0 - g_out_obj).mean()
                 
                 if use_bkg_net_D:
                     if use_instance_noise_input_D:
                         g2_out_fake = netD2(add_normal_noise_input_D(fake_images*weight_map))
                     else:
                         g2_out_fake = netD2(fake_images*weight_map)
-                    g2_loss_fake = - g2_out_fake.mean()
+                    g2_loss_fake = torch.nn.ReLU()(1.0 - g2_out_fake).mean()
 
                 if use_ssim_net_G:
                     ssim_loss = ssim((fake_images*0.5+0.5)*weight_map, (non_fire_images*0.5+0.5)*weight_map)
@@ -280,7 +287,7 @@ def main(args):
                 g_ssim += ssim_loss
                 g_all += g_loss
 
-            if (idx+1) % 1 == 0:
+            if (idx+1) % args.print_freq == 0:
                 elapsed = time.time() - start_time
                 elapsed = str(datetime.timedelta(seconds=elapsed))
                 logger.info("Time Elapsed: [{}]".format(elapsed))
@@ -323,6 +330,7 @@ def main(args):
         # save model
         if (epoch + 1) % 5 == 0:
             torch.save(netG.state_dict(), os.path.join(args.out_path, 'model/', 'G_%d.pth' % (epoch+1)))
+            torch.save(netD.state_dict(), os.path.join(args.out_path, 'model/', 'D_%d.pth' % (epoch+1)))
             
             for idx, data in enumerate(dataloader):
                 if idx == 0:
@@ -333,13 +341,20 @@ def main(args):
                     non_fire_crops = non_fire_crops[0:1].cuda()
                     z_obj = torch.from_numpy(truncted_random(num_o=max_num_obj, thres=2.0)).float().cuda()
                     break
-                
+
+            #Network() processing    
             netG.eval()
+            netD.eval()
             fake_images, _ = netG.forward(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+            g_out_fake, _ = netD(fake_images, bbox.cuda(), label)
+            
+            #Img_show() processing
             fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             fake_images = np.array(fake_images*255, np.uint8)
-            fake_images = draw_layout(label, bbox, [256,256], class_names, fake_images)
-            
+            g_out_fake  = g_out_fake[0,0].cpu().detach()
+            g_out_fake = -1 if g_out_fake<-1 else 1 if g_out_fake>1 else torch.round(g_out_fake,decimals=2)
+            fake_images = draw_layout(label, bbox, [256,256], class_names, fake_images, g_out_fake)
+
             fire_images = fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             fire_images = np.array(fire_images*255, np.uint8)
             fire_images = draw_layout(label, bbox, [256,256], class_names, fire_images)
@@ -351,7 +366,6 @@ def main(args):
             cv2.imwrite(args.out_path+"samples/"+ 'G_%d_real-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
             cv2.imwrite(args.out_path+"samples/"+ 'G_%d_fake-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(fake_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
             cv2.imwrite(args.out_path+"samples/"+ 'G_%d_non-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(non_fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
-            netG.train()
 
 
 def truncted_random(num_o=8, thres=1.0):
