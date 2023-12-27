@@ -8,7 +8,8 @@ import torch
 from data.cocostuff_loader import CocoSceneGraphDataset
 from data.data_loader import FireDataset
 
-from model.resnet_generator import ResnetGenerator128, CombineDiscriminator128
+from model.resnet_generator import ResnetGenerator128
+from model.rcnn_discriminator import CombineDiscriminator128
 
 from utils.util import draw_layout, IS_compute_np
 
@@ -29,8 +30,8 @@ def normalize_minmax(img, targe_range):
 def main(args):
     #Common
     args.mode = 'train'
-    args.G_path = "./outputs/model_test/G_200_switching.pth"
-    args.D_path = ""
+    args.G_path = "./outputs/model_test/G_200_v1_bug.pth"
+    args.D_path = "./outputs/model_test/D_200_v1_bug.pth"
     img_size = (args.img_size, args.img_size)
 
     #Special: Test
@@ -80,8 +81,8 @@ def main(args):
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
     netD = CombineDiscriminator128(num_classes=num_classes).cuda()
 
-    if not os.path.isfile(args.model_path):
-        raise FileNotFoundError("Not found model on provided path: {}".format(args.model_path))
+    if not os.path.isfile(args.G_path):
+        raise FileNotFoundError("Not found model on provided path: {}".format(args.G_path))
     
     state_dict = torch.load(args.G_path)
     model_dict = netG.state_dict()
@@ -124,9 +125,13 @@ def main(args):
         fake_images = np.array(fake_images*255, np.uint8)
         fake_images = draw_layout(label, bbox, [256,256], class_names, input_img=fake_images, D_class_score=g_out_fake)
 
+        g_out_real, _ = netD(fire_images, bbox.cuda(), label)
+        g_out_real  = g_out_real[0,0].cpu().detach()
+        g_out_real = -1 if g_out_real<-1 else 1 if g_out_real>1 else torch.round(g_out_real,decimals=2)
+
         fire_images = fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fire_images = np.array(fire_images*255, np.uint8)
-        fire_images = draw_layout(label, bbox, [256,256], class_names, input_img=fire_images)
+        fire_images = draw_layout(label, bbox, [256,256], class_names, input_img=fire_images, D_class_score=g_out_real)
 
         non_fire_images = non_fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         non_fire_images = np.array(non_fire_images*255, np.uint8)

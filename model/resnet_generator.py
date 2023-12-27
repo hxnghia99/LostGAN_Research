@@ -140,7 +140,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o_label, h, w]  #select and keep only masks in class_label
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')   #activation + filter the area outside bbox
         alpha1 = torch.gather(self.sigmoid(self.alpha1).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)    #select and keep only alpha in class_label
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha1) + seman_bbox * alpha1
+        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='nearest') * (1 - alpha1) + seman_bbox * alpha1    #combine
         x, stage_mask = self.res7(x, latent_vector, stage_bbox)
         x = x + x3
         #32x32x256
@@ -148,7 +148,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
         alpha2 = torch.gather(self.sigmoid(self.alpha2).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha2) + seman_bbox * alpha2
+        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='nearest') * (1 - alpha2) + seman_bbox * alpha2
         x, stage_mask = self.res8(x, latent_vector, stage_bbox)
         x = x + x2
         #64x64x128
@@ -156,7 +156,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
         alpha3 = torch.gather(self.sigmoid(self.alpha3).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha3) + seman_bbox * alpha3
+        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='nearest') * (1 - alpha3) + seman_bbox * alpha3
         x, stage_mask = self.res9(x, latent_vector, stage_bbox)
         x = x + x1
         #128x128x64
@@ -164,7 +164,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
         alpha4 = torch.gather(self.sigmoid(self.alpha4).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha4) + seman_bbox * alpha4
+        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='nearest') * (1 - alpha4) + seman_bbox * alpha4
         x, _ = self.res10(x, latent_vector, stage_bbox)
         x = x + x0
         # to RGB
