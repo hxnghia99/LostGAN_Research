@@ -150,19 +150,21 @@ class OptimizedBlock(nn.Module):
         super(OptimizedBlock, self).__init__()
         self.conv1 = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
         self.conv2 = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
-        self.conv_sc = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=1, padding=0), eps=1e-4)
+        self.conv3 = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
+        self.conv_sc = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=1, padding=0), eps=1e-4)
         self.activation = nn.ReLU()
         self.downsample = downsample
     
     def shortcut(self, x):
+        x = self.conv_sc(x)
         if self.downsample:
             x = F.avg_pool2d(x, 2)
-        return self.conv_sc(x)
+        return x
     
     def forward(self, in_feat):
-        x = in_feat
-        x = self.activation(self.conv1(x))
-        x = self.conv2(x)
+        x1 = self.activation(self.conv1(in_feat))  #RGB -> 64 channels
+        x = self.activation(self.conv2(x1))
+        x = self.conv3(x)
         if self.downsample:
             x = F.avg_pool2d(x, 2)
-        return x + self.shortcut(in_feat)
+        return x + self.shortcut(x1)

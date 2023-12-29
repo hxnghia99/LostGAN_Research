@@ -65,7 +65,7 @@ def main(args):
     use_ssim_net_G = False
     use_bkg_net_D = False
     use_instance_noise_input_D = False
-    use_accuracy_constrain_D = True
+    use_accuracy_constrain_D = False
     use_identity_loss = False
 
     #Model
@@ -128,16 +128,17 @@ def main(args):
     dis_parameters = []
     for key, value in dict(netD.named_parameters()).items():
         if value.requires_grad:
-            dis_parameters += [{'params': [value], 'lr': d_lr}]
-    d_optimizer = torch.optim.Adam(dis_parameters, betas=(0.5, 0.999))
-
+            dis_parameters += [{'params': [value], 'lr': d_lr/2}]
+    # d_optimizer = torch.optim.Adam(dis_parameters, betas=(0.5, 0.999))
+    d_optimizer = torch.optim.SGD(dis_parameters)
     if use_bkg_net_D:
         #bkg: non-fire/fake-non-fire
         dis2_parameters = []
         for key, value in dict(netD2.named_parameters()).items():
             if value.requires_grad:
-                dis2_parameters += [{'params': [value], 'lr': d_lr}]
-        d2_optimizer = torch.optim.Adam(dis2_parameters, betas=(0.5, 0.999))
+                dis2_parameters += [{'params': [value], 'lr': d_lr/2}]
+        # d2_optimizer = torch.optim.Adam(dis2_parameters, betas=(0.5, 0.999))
+        d2_optimizer = torch.optim.SGD(dis2_parameters)
 
     if not os.path.exists(args.out_path):
         os.mkdir(args.out_path)
@@ -297,11 +298,11 @@ def main(args):
                 netG.zero_grad()
                 #Adversarial loss from D1
                 if use_instance_noise_input_D:
-                    g_out_fake, g_out_obj = netD(add_normal_noise_input_D(fake_images), bbox.cuda(), label)
+                    g_out_fake, g_out_fobj = netD(add_normal_noise_input_D(fake_images), bbox.cuda(), label)
                 else:
-                    g_out_fake, g_out_obj = netD(fake_images, bbox.cuda(), label)
-                g_loss_fake = torch.nn.ReLU()(1.0 - g_out_fake).mean()
-                g_loss_obj = torch.nn.ReLU()(1.0 - g_out_obj).mean()
+                    g_out_fake, g_out_fobj = netD(fake_images, bbox.cuda(), label)
+                g_loss_fake =  - g_out_fake.mean()
+                g_loss_fobj = - g_out_fobj.mean()
                 
                 #Adversarial loss from D2
                 if use_bkg_net_D:
@@ -309,7 +310,7 @@ def main(args):
                         g2_out_fake = netD2(add_normal_noise_input_D(fake_images*weight_map))
                     else:
                         g2_out_fake = netD2(fake_images*weight_map)
-                    g2_loss_fake = torch.nn.ReLU()(1.0 - g2_out_fake).mean()
+                    g2_loss_fake = - g2_out_fake.mean()
 
                 #structure similarity loss
                 if use_ssim_net_G:
@@ -322,22 +323,22 @@ def main(args):
                 #Identity loss
                 if use_identity_loss:
                     rec_images, _ = netG(z_img=fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
-                    rec_pixel_loss = l1_loss(rec_images, fire_images).mean()
-                    rec_feat_loss = vgg_loss(rec_images, rec_images).mean()
+                    rec_pixel_loss = l1_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
+                    rec_feat_loss = vgg_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
 
-                g_loss = g_loss_obj * lamb_obj + g_loss_fake * lamb_img + pixel_loss + feat_loss 
+                g_loss = g_loss_fobj * lamb_obj + g_loss_fake * lamb_img + pixel_loss + feat_loss 
                 if use_bkg_net_D:
                     g_loss += g2_loss_fake * lamb_img
                 if use_ssim_net_G:
                     g_loss += ssim_loss
                 if use_identity_loss:
-                    g_loss += rec_pixel_loss + rec_feat_loss
+                    g_loss += (rec_pixel_loss + rec_feat_loss) * lamb_img
 
                 g_loss.backward()
                 g_optimizer.step()
 
                 writer.add_scalar("iter_g_loss/g_fake_img", g_loss_fake*lamb_img, global_step=global_steps)
-                writer.add_scalar("iter_g_loss/g_fake_obj", g_loss_obj*lamb_obj, global_step=global_steps)
+                writer.add_scalar("iter_g_loss/g_fake_obj", g_loss_fobj*lamb_obj, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_fake_bkg", g2_loss_fake*lamb_img, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_l1", pixel_loss, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_vgg", feat_loss, global_step=global_steps)
@@ -346,7 +347,7 @@ def main(args):
                 writer.add_scalar("iter_g_loss/g_rec_vgg", rec_feat_loss, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_total", g_loss, global_step=global_steps)
                 g_fake_img += g_loss_fake*lamb_img
-                g_fake_obj += g_loss_obj*lamb_obj
+                g_fake_obj += g_loss_fobj*lamb_obj
                 g_fake_bkg += g2_loss_fake*lamb_img
                 g_l1 += pixel_loss
                 g_vgg += feat_loss
@@ -367,7 +368,7 @@ def main(args):
                 logger.info("             d_obj_real: {:.4f}, d_obj_fake: {:.4f}, g_obj_fake: {:.4f} ".format(
                                                                                                         d_loss_robj.item(),
                                                                                                         d_loss_fobj.item(),
-                                                                                                        g_loss_obj.item()))
+                                                                                                        g_loss_fobj.item()))
                 logger.info("             ssim_loss: {:.4f}, pixel_loss: {:.4f}, feat_loss: {:.4f}".format(
                                                                                                         ssim_loss.item(), 
                                                                                                         pixel_loss.item(), 

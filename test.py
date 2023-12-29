@@ -30,8 +30,8 @@ def normalize_minmax(img, targe_range):
 def main(args):
     #Common
     args.mode = 'train'
-    args.G_path = "./outputs/model_test/G_200_v1_bug.pth"
-    args.D_path = "./outputs/model_test/D_200_v1_bug.pth"
+    args.G_path = "./outputs/model/G_200.pth"
+    args.D_path = "./outputs/model/D_200.pth"
     img_size = (args.img_size, args.img_size)
 
     #Special: Test

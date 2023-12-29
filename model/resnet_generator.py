@@ -33,6 +33,7 @@ class ResnetGenerator128(nn.Module):
         self.res8 = ResBlock(ch*8, ch*4, upsample=True, num_w=z_obj_dim, num_classes=num_classes)  #channel: 512->256
         self.res9 = ResBlock(ch*4, ch*2, upsample=True, num_w=z_obj_dim, num_classes=num_classes, psp_module=True)  #channel: 256->128
         self.res10 = ResBlock(ch*2, ch*1, upsample=True, num_w=z_obj_dim, num_classes=num_classes, predict_mask=False)  #channel: 128->64
+        self.res11 = ResBlock_en(ch, ch)
 
         self.final = nn.Sequential(nn.BatchNorm2d(ch),
                                    nn.ReLU(),
@@ -124,7 +125,7 @@ class ResnetGenerator128(nn.Module):
         x3 = self.res3(x2)     # 16x16x512
         x4 = self.res4(x3)      # 8x8x1024
         x = self.res5(x4)      # 4x4x1024
-        # x = self.activation(x)  # [batch, 1024, 4, 4]
+        x = self.activation(x)  # [batch, 1024, 4, 4]
 
         """Iterative process in 1 ResBlock:
         1) Use bbox_class_mask (b, o_label, H, W) for ResBlock : stage_mask (b, o_cate, H, W)
@@ -167,6 +168,8 @@ class ResnetGenerator128(nn.Module):
         stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='nearest') * (1 - alpha4) + seman_bbox * alpha4
         x, _ = self.res10(x, latent_vector, stage_bbox)
         x = x + x0
+        #128x128x64
+        x = self.res11(x)
         # to RGB
         x = self.final(x)
         return x, stage_mask
@@ -274,22 +277,24 @@ class OptimizedBlock_en(nn.Module):
         super(OptimizedBlock_en, self).__init__()
         self.conv1 = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
         self.conv2 = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
-        self.conv_sc = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=1, padding=0), eps=1e-4)
+        self.conv3 = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
+        self.conv_sc = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=1, padding=0), eps=1e-4)
         self.activation = nn.ReLU()
         self.downsample = downsample
     
     def shortcut(self, x):
+        x = self.conv_sc(x)
         if self.downsample:
             x = F.avg_pool2d(x, 2)
-        return self.conv_sc(x)
+        return x
     
     def forward(self, in_feat):
-        x = in_feat
-        x = self.activation(self.conv1(x))
-        x = self.conv2(x)
+        x1 = self.activation(self.conv1(in_feat))  #RGB -> 64 channels
+        x = self.activation(self.conv2(x1))
+        x = self.conv3(x)
         if self.downsample:
             x = F.avg_pool2d(x, 2)
-        return x + self.shortcut(in_feat)
+        return x + self.shortcut(x1)
 
 
 
