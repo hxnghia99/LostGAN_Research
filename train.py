@@ -16,7 +16,7 @@ from data.cocostuff_loader import CocoSceneGraphDataset
 from data.data_loader import FireDataset
 from model.resnet_generator import ResnetGenerator128
 from model.rcnn_discriminator import CombineDiscriminator128, BkgResnetDiscriminator128
-from utils.util import VGGLoss, draw_layout
+from utils.util import VGGLoss, draw_layout, truncted_random
 
 def add_normal_noise_input_D(images, mean=0, std=0.1):
     noise = torch.randn_like(images) * std + mean
@@ -50,7 +50,7 @@ def main(args):
     '''Configuration setup'''
     #Common
     args.mode = 'train'
-    args.batch_size = 16
+    args.batch_size = 12
     args.total_epoch = 200
     args.print_freq = 1
     args.num_workers = 0
@@ -66,10 +66,13 @@ def main(args):
     use_bkg_net_D = False
     use_instance_noise_input_D = False
     use_accuracy_constrain_D = False
-    use_identity_loss = False
+    use_identity_loss = True
 
     #Model
-    z_dim = 128
+    z_obj_random_dim = 32
+    z_obj_cls_dim = 32
+    normalized = False  #re-scale from [0,1] to [-1,1]
+
     lamb_obj = 1.0
     lamb_img = 0.1
     g_lr, d_lr = args.g_lr, args.d_lr
@@ -99,7 +102,8 @@ def main(args):
                                 max_objects_per_image=max_num_obj,
                                 get_first_fire_smoke=get_first_fire_smoke,
                                 use_noised_input=use_noised_input,
-                                weight_map_type=weight_map_type)
+                                weight_map_type=weight_map_type,
+                                normalize_images=normalized)
 
         with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
             class_names = f.read().splitlines()
@@ -109,7 +113,7 @@ def main(args):
     dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=args.num_workers)
 
     #Model
-    netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
+    netG = ResnetGenerator128(num_classes=num_classes, output_dim=3, z_obj_random_dim=z_obj_random_dim, z_obj_class_dim=z_obj_cls_dim, normalized_data=normalized).cuda()
     netD = CombineDiscriminator128(num_classes=num_classes).cuda()
     if use_bkg_net_D:
         netD2 = BkgResnetDiscriminator128(num_classes=num_classes).cuda()
@@ -129,16 +133,16 @@ def main(args):
     for key, value in dict(netD.named_parameters()).items():
         if value.requires_grad:
             dis_parameters += [{'params': [value], 'lr': d_lr/2}]
-    # d_optimizer = torch.optim.Adam(dis_parameters, betas=(0.5, 0.999))
-    d_optimizer = torch.optim.SGD(dis_parameters)
+    d_optimizer = torch.optim.Adam(dis_parameters, betas=(0.5, 0.999))
+    # d_optimizer = torch.optim.SGD(dis_parameters)
     if use_bkg_net_D:
         #bkg: non-fire/fake-non-fire
         dis2_parameters = []
         for key, value in dict(netD2.named_parameters()).items():
             if value.requires_grad:
                 dis2_parameters += [{'params': [value], 'lr': d_lr/2}]
-        # d2_optimizer = torch.optim.Adam(dis2_parameters, betas=(0.5, 0.999))
-        d2_optimizer = torch.optim.SGD(dis2_parameters)
+        d2_optimizer = torch.optim.Adam(dis2_parameters, betas=(0.5, 0.999))
+        # d2_optimizer = torch.optim.SGD(dis2_parameters)
 
     if not os.path.exists(args.out_path):
         os.mkdir(args.out_path)
@@ -188,9 +192,15 @@ def main(args):
             non_fire_images, non_fire_crops = non_fire_images.cuda(),  non_fire_crops.cuda()
             
             #fake image+objects
-            z_obj = torch.randn(fire_images.size(0), max_num_obj, z_dim).cuda()     #[batch, num_obj, 128]
+            if normalized:
+                z_obj = torch.randn(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()     #[batch, num_obj, 128]
+            else:
+                z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
+
             fake_images, _ = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
-            
+            if not normalized:
+                fake_images = fake_images*0.5+0.5   #scale to [0,1]
+
             if use_accuracy_constrain_D:
                 with torch.no_grad():
                     if use_instance_noise_input_D:
@@ -332,7 +342,7 @@ def main(args):
                 if use_ssim_net_G:
                     g_loss += ssim_loss
                 if use_identity_loss:
-                    g_loss += (rec_pixel_loss + rec_feat_loss) * lamb_img
+                    g_loss += (rec_pixel_loss + rec_feat_loss) * lamb_img * 0.2
 
                 g_loss.backward()
                 g_optimizer.step()
@@ -421,26 +431,40 @@ def main(args):
                     fire_images = fire_images[0:1].cuda()
                     non_fire_images = non_fire_images[0:1].cuda()
                     non_fire_crops = non_fire_crops[0:1].cuda()
-                    z_obj = torch.from_numpy(truncted_random(num_o=max_num_obj, thres=2.0)).float().cuda()
+                    if normalized:
+                        z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=2.0)).float().cuda()
+                    else:
+                        z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
                     break
 
             #Network() processing    
             netG.eval()
             netD.eval()
             fake_images, _ = netG.forward(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+            if not normalized:
+                fake_images = fake_images*0.5+0.5
             g_out_fake, _ = netD(fake_images, bbox.cuda(), label)
-            
+            g_out_real, _ = netD(fire_images, bbox.cuda(), label)
+
             #Img_show() processing
+            if not normalized:
+                fake_images = (fake_images-0.5)*2
             fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             fake_images = np.array(fake_images*255, np.uint8)
             g_out_fake  = g_out_fake[0,0].cpu().detach()
             g_out_fake = -1 if g_out_fake<-1 else 1 if g_out_fake>1 else torch.round(g_out_fake,decimals=2)
             fake_images = draw_layout(label, bbox, [256,256], class_names, fake_images, g_out_fake)
 
+            if not normalized:
+                fire_images = (fire_images-0.5)*2
             fire_images = fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             fire_images = np.array(fire_images*255, np.uint8)
+            g_out_real  = g_out_real[0,0].cpu().detach()
+            g_out_real = -1 if g_out_real<-1 else 1 if g_out_real>1 else torch.round(g_out_real,decimals=2)
             fire_images = draw_layout(label, bbox, [256,256], class_names, fire_images)
 
+            if not normalized:
+                non_fire_images = (non_fire_images-0.5)*2
             non_fire_images = non_fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             non_fire_images = np.array(non_fire_images*255, np.uint8)
             non_fire_images = draw_layout(label, bbox, [256,256], class_names, non_fire_images)
@@ -449,14 +473,6 @@ def main(args):
             cv2.imwrite(args.out_path+"samples/"+ 'G_%d_fake-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(fake_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
             cv2.imwrite(args.out_path+"samples/"+ 'G_%d_non-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(non_fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
 
-
-def truncted_random(num_o=8, thres=1.0):
-    z = np.ones((1, num_o, 128)) * 100
-    for i in range(num_o):
-        for j in range(128):
-            while z[0, i, j] > thres or z[0, i, j] < - thres:
-                z[0, i, j] = np.random.normal()
-    return z
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()

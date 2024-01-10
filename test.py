@@ -11,16 +11,10 @@ from data.data_loader import FireDataset
 from model.resnet_generator import ResnetGenerator128
 from model.rcnn_discriminator import CombineDiscriminator128
 
-from utils.util import draw_layout, IS_compute_np
+from utils.util import draw_layout, IS_compute_np, truncted_random
 
 
-def truncted_random(num_o=8, thres=1.0):
-    z = np.ones((1, num_o, 128)) * 100
-    for i in range(num_o):
-        for j in range(128):
-            while z[0, i, j] > thres or z[0, i, j] < - thres:
-                z[0, i, j] = np.random.normal()
-    return z
+
 
 def normalize_minmax(img, targe_range):
     target_min, target_max = targe_range
@@ -30,14 +24,18 @@ def normalize_minmax(img, targe_range):
 def main(args):
     #Common
     args.mode = 'train'
-    args.G_path = "./outputs/model/G_200.pth"
-    args.D_path = "./outputs/model/D_200.pth"
+    args.G_path = "./outputs/model_test/HXNGHIA3/G_200.pth"
+    args.D_path = "./outputs/model_test/HXNGHIA3/D_200.pth"
     img_size = (args.img_size, args.img_size)
 
     #Special: Test
     use_noised_input = False
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
     get_first_fire_smoke = True if max_num_obj==2 else False
+    z_obj_random_dim = 32
+    z_obj_cls_dim = 32
+    normalized = False
+    z_obj_random_thres=2.0
 
     #Training Initilization
     save_results = False
@@ -67,7 +65,8 @@ def main(args):
                                 image_size=img_size, left_right_flip=False,
                                 use_noised_input=use_noised_input,
                                 max_objects_per_image=max_num_obj,
-                                get_first_fire_smoke=get_first_fire_smoke)
+                                get_first_fire_smoke=get_first_fire_smoke,
+                                normalize_images=normalized)
 
         with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
             class_names = f.read().splitlines()
@@ -78,7 +77,7 @@ def main(args):
     dataloader = torch.utils.data.DataLoader(train_data, batch_size=1, drop_last=True, shuffle=False, num_workers=0)#num_workers=args.num_workers)
 
 
-    netG = ResnetGenerator128(num_classes=num_classes, output_dim=3).cuda()
+    netG = ResnetGenerator128(num_classes=num_classes, output_dim=3, z_obj_random_dim=z_obj_random_dim, z_obj_class_dim=z_obj_cls_dim, normalized_data=normalized).cuda()
     netD = CombineDiscriminator128(num_classes=num_classes).cuda()
 
     if not os.path.isfile(args.G_path):
@@ -103,7 +102,7 @@ def main(args):
 
     if not os.path.exists(args.sample_path):
         os.makedirs(args.sample_path)
-    thres=2.0
+
     if save_results:
         id_img = 0
     for idx, data in enumerate(dataloader):
@@ -113,26 +112,36 @@ def main(args):
         non_fire_images = non_fire_images.cuda()
         non_fire_crops = non_fire_crops.cuda()
 
-        z_obj = torch.from_numpy(truncted_random(num_o=max_num_obj, thres=thres)).float().cuda()
+        if normalized:
+            z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=True)).float().cuda()
+        else:
+            z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
         fake_images, stage_masks = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+        if not normalized:
+            fake_images = fake_images*0.5+0.5
         g_out_fake, _ = netD(fake_images, bbox.cuda(), label)
-        g_out_fake  = g_out_fake[0,0].cpu().detach()
-        g_out_fake = -1 if g_out_fake<-1 else 1 if g_out_fake>1 else torch.round(g_out_fake,decimals=2)
+        g_out_real, _ = netD(fire_images, bbox.cuda(), label)
 
         # fake_fire_crops = fake_images * weight_map
         
+        if not normalized:
+            fake_images = (fake_images-0.5)*2
         fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fake_images = np.array(fake_images*255, np.uint8)
+        g_out_fake  = g_out_fake[0,0].cpu().detach()
+        g_out_fake = -1 if g_out_fake<-1 else 1 if g_out_fake>1 else torch.round(g_out_fake,decimals=2)
         fake_images = draw_layout(label, bbox, [256,256], class_names, input_img=fake_images, D_class_score=g_out_fake)
 
-        g_out_real, _ = netD(fire_images, bbox.cuda(), label)
-        g_out_real  = g_out_real[0,0].cpu().detach()
-        g_out_real = -1 if g_out_real<-1 else 1 if g_out_real>1 else torch.round(g_out_real,decimals=2)
-
+        if not normalized:
+            fire_images = (fire_images-0.5)*2
         fire_images = fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fire_images = np.array(fire_images*255, np.uint8)
+        g_out_real  = g_out_real[0,0].cpu().detach()
+        g_out_real = -1 if g_out_real<-1 else 1 if g_out_real>1 else torch.round(g_out_real,decimals=2)
         fire_images = draw_layout(label, bbox, [256,256], class_names, input_img=fire_images, D_class_score=g_out_real)
 
+        if not normalized:
+            non_fire_images = (non_fire_images-0.5)*2
         non_fire_images = non_fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         non_fire_images = np.array(non_fire_images*255, np.uint8)
         non_fire_images = draw_layout(label, bbox, [256,256], class_names, input_img=non_fire_images)
@@ -202,7 +211,7 @@ if __name__ == "__main__":
     parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, val")
     parser.add_argument('--dataset',        type=str,   default='fire3',              help='training dataset')
     parser.add_argument('--img_size',       type=int,   default=128,                help='test input resolution')
-    parser.add_argument('--G_path',     type=str,   default="./outputs/model_test/G_200_switching.pth",
+    parser.add_argument('--G_path',     type=str,   default="./outputs/model_test/HXNGHIA3/G_200.pth",
                                                                                    help='which epoch to load')
     parser.add_argument('--sample_path',    type=str,   default='samples',          help='path to save generated images')
     args = parser.parse_args()

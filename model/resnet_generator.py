@@ -6,17 +6,18 @@ from .norm_module import SpatialAdaptiveBatchNorm2d
 from .mask_regression import MaskRegressNet
 
 class ResnetGenerator128(nn.Module):
-    def __init__(self, ch=64, z_obj_random_dim=128, z_obj_class_dim=128, num_classes=184, output_dim=3, mask_size=16, map_size= 64, input_dim=3):
+    def __init__(self, ch=64, z_obj_random_dim=128, z_obj_class_dim=128, num_classes=184, output_dim=3, mask_size=16, map_size=64, input_dim=3, normalized_data=True):
         super(ResnetGenerator128, self).__init__()
         
         self.mask_size = mask_size
         self.map_size = map_size
 
+        #z_obj_random + z_cls -> z_obj (latent_vector)
         self.label_embedding = nn.Embedding(num_classes, embedding_dim=z_obj_class_dim)   #Embedding matrix W shaped [num_class x z_obj_class_dim]
-        self.z_random_dim = z_obj_random_dim
-
         z_obj_dim = z_obj_random_dim + z_obj_class_dim
-        self.fc = nn.utils.spectral_norm(nn.Linear(self.z_random_dim, 4*4*16*ch))
+        
+        # self.z_random_dim = z_obj_random_dim
+        # self.fc = nn.utils.spectral_norm(nn.Linear(self.z_random_dim, 4*4*16*ch))
 
         #encoder path
         self.res0 = OptimizedBlock_en(input_dim, ch, downsample=False)
@@ -51,7 +52,7 @@ class ResnetGenerator128(nn.Module):
         
         self.sigmoid = nn.Sigmoid()
         
-        self.mask_regress = MaskRegressNet(z_obj_dim, mask_size=mask_size, map_size=map_size)
+        self.mask_regress = MaskRegressNet(obj_feat=z_obj_dim, mask_size=mask_size, map_size=map_size, normalized_data=normalized_data)
         self.init_parameter()
         
 
@@ -100,7 +101,7 @@ class ResnetGenerator128(nn.Module):
 
     def forward(self, z_img, z_obj, bbox, class_label):
         b, o = z_obj.size(0), z_obj.size(1)
-        class_label_embedding = self.label_embedding(class_label)
+        class_label_embedding = self.label_embedding(class_label)       #class-based one-hot vector -> vector [128]
 
         z_obj = z_obj.view(b*o, -1)     #[b*o, 128]
         class_label_embedding = class_label_embedding.view(b*o, -1) #[b*o, 180]
@@ -111,8 +112,8 @@ class ResnetGenerator128(nn.Module):
         # preprocess bbox -> mask with information of bbox + class: value inside bbox in range [-1, 1], outside 0
         bbox_class_mask = self.mask_regress(latent_vector, bbox)      #encoding latent_vector+bbox --> [b, o_label, H(64), W(64)]
         
-        if z_img is None:
-            z_img = torch.randn((b, self.z_random_dim)).cuda()  #shape [b, 128]
+        # if z_img is None:
+        #     z_img = torch.randn((b, self.z_random_dim)).cuda()  #shape [b, 128]
         
         bbox_only_mask = self._bbox_mask_generator(z_obj, bbox, self.map_size, self.map_size)   #extreme case: 0 outside, 1 inside bbox
 

@@ -113,7 +113,7 @@ class FireDataset(Dataset):
     #Setup the input resolution: Resize --> ToTensor --> Normalize (optional)
     def set_image_size(self, image_size):
         print('The program called set_image_size() : ', image_size)
-        transform = [T.Resize(image_size, interpolation=T.InterpolationMode.BILINEAR), T.ToTensor()]
+        transform = [T.Resize(image_size, interpolation=T.InterpolationMode.BILINEAR), T.ToTensor()]    #toTensor(): Normalize (0, 1)
         if self.normalize_images:
             transform.append(T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD))
         self.transform = T.Compose(transform)       #used in __getitem__()

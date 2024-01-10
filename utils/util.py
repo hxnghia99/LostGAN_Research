@@ -53,8 +53,15 @@ class VGGLoss(nn.Module):
         for i in range(len(x_vgg)):
             loss += self.weights[i] * self.criterion(x_vgg[i], y_vgg[i].detach())
         return loss
+   
     
-
+def truncted_random(z_obj_dim, num_o=8, thres=1.0, test=False):
+    z = np.ones((1, num_o, z_obj_dim)) * 100
+    for i in range(num_o):
+        for j in range(z_obj_dim):
+            while z[0, i, j] > thres or z[0, i, j] < - thres:
+                z[0, i, j] = 0.5 if test else np.random.normal()
+    return z
 
 
 def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=None):

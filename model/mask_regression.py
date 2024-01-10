@@ -5,12 +5,13 @@ import torch.nn.functional as F
 # from utils.bilinear import *
 
 class MaskRegressNet(nn.Module):
-    def __init__(self, obj_feat=128, mask_size=16, map_size=64):
+    def __init__(self, obj_feat=128, mask_size=16, map_size=64, normalized_data=True):
         super(MaskRegressNet, self).__init__()
         self.mask_size = mask_size
         self.map_size = map_size
+        self.normalized_data = normalized_data
         
-        self.fc = nn.utils.spectral_norm(nn.Linear(obj_feat, 256*4*4))
+        self.fc = nn.utils.spectral_norm(nn.Linear(obj_feat, 256*4*4))  #z_obj_dim -> 256x4x4 (4096)
 
         conv1 = list()
         conv1.append(nn.utils.spectral_norm(nn.Conv2d(256, 256, kernel_size=3, padding=1)))
@@ -47,7 +48,7 @@ class MaskRegressNet(nn.Module):
         x = self.conv2(x)                               #output [b*o, 256, 8, 8]     
         x = F.interpolate(x, size=16, mode='bilinear')  #output [b*o, 256, 16, 16]     
         x = self.conv3(x)                               #output [b*o, 1, 16, 16]     
-        x = x.view(b, num_o, 16, 16)            
+        x = x.view(b, num_o, self.mask_size, self.mask_size)            
         #above: an encoding of z_obj_random+z_obj_class
         #not have information bbox
         bbmap = self._masks_to_layout(bbox, x, self.map_size).view(b, num_o, self.map_size, self.map_size)
@@ -108,5 +109,6 @@ class MaskRegressNet(nn.Module):
 
         #Values at bbox_pos in range [0, 1], others <0 or >1
         #Transform grid to scale [-1, 1]
-        grid = grid.mul(2).sub(1)
+        if self.normalized_data:
+            grid = grid.mul(2).sub(1)
         return grid
