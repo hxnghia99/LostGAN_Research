@@ -24,18 +24,20 @@ def normalize_minmax(img, targe_range):
 def main(args):
     #Common
     args.mode = 'train'
-    args.G_path = "./outputs/model_test/HXNGHIA3/G_200.pth"
-    args.D_path = "./outputs/model_test/HXNGHIA3/D_200.pth"
+    args.G_path = "./outputs/model_test/HXNGHIA/G_150.pth"
+    args.D_path = "./outputs/model_test/HXNGHIA/D_150.pth"
     img_size = (args.img_size, args.img_size)
 
     #Special: Test
     use_noised_input = False
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
     get_first_fire_smoke = True if max_num_obj==2 else False
-    z_obj_random_dim = 32
-    z_obj_cls_dim = 32
-    normalized = False
+    z_obj_random_dim = 128
+    z_obj_cls_dim = 128
+    normalized = True
     z_obj_random_thres=2.0
+
+    phase_testing = True
 
     #Training Initilization
     save_results = False
@@ -66,7 +68,8 @@ def main(args):
                                 use_noised_input=use_noised_input,
                                 max_objects_per_image=max_num_obj,
                                 get_first_fire_smoke=get_first_fire_smoke,
-                                normalize_images=normalized)
+                                normalize_images=normalized,
+                                test=phase_testing)
 
         with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
             class_names = f.read().splitlines()
@@ -106,14 +109,14 @@ def main(args):
     if save_results:
         id_img = 0
     for idx, data in enumerate(dataloader):
-        [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
-        label, bbox, weight_map = label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
+        [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map, weight_map_64 = data
+        label, bbox, weight_map, weight_map_64 = label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda(), weight_map_64.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
         fire_images = fire_images.cuda()
         non_fire_images = non_fire_images.cuda()
         non_fire_crops = non_fire_crops.cuda()
 
         if normalized:
-            z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=True)).float().cuda()
+            z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=phase_testing)).float().cuda()
         else:
             z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
         fake_images, stage_masks = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
@@ -155,10 +158,13 @@ def main(args):
         smoke_mask  = draw_layout(label, bbox, [256,256], class_names, input_img=smoke_mask)
         # bkg_mask    = normalize_minmax(stage_masks[0][3:4].cpu().detach().numpy().transpose(1,2,0), [0, 255])
         # bkg_mask    = draw_layout(label, bbox, [256,256], class_names, input_img=bkg_mask)
+        fire_seg    = cv2.resize((normalize_minmax(np.squeeze((stage_masks[0][1:2].cpu().detach().numpy().transpose(1,2,0))), [0, 255])>197.6).astype(np.uint8)*255 * (1-weight_map_64)[0][0].cpu().numpy(), (128,128))
+        fire_seg  = draw_layout(label, bbox, [256,256], class_names, input_img=fire_seg)
 
         cv2.imshow("None mask", cv2.resize(none_mask.astype(np.uint8), (256, 256)))
         cv2.imshow("Fire mask", cv2.resize(fire_mask.astype(np.uint8), (256, 256)))
         cv2.imshow("Smoke mask", cv2.resize(smoke_mask.astype(np.uint8), (256, 256)))
+        cv2.imshow("Fire Seg", cv2.resize(fire_seg.astype(np.uint8), (256, 256)))
         # cv2.imshow("Background mask", cv2.resize(bkg_mask.astype(np.uint8), (256, 256)))
 
         # non_fire_crops = non_fire_crops[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5

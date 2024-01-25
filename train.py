@@ -51,7 +51,7 @@ def main(args):
     #Common
     args.mode = 'train'
     args.batch_size = 12
-    args.total_epoch = 200
+    args.total_epoch = 150
     args.print_freq = 1
     args.num_workers = 0
     img_size = (args.img_size, args.img_size)
@@ -66,12 +66,12 @@ def main(args):
     use_bkg_net_D = False
     use_instance_noise_input_D = False
     use_accuracy_constrain_D = False
-    use_identity_loss = True
+    use_identity_loss = False
 
     #Model
-    z_obj_random_dim = 32
-    z_obj_cls_dim = 32
-    normalized = False  #re-scale from [0,1] to [-1,1]
+    z_obj_random_dim = 128
+    z_obj_cls_dim = 128
+    normalized = True  #re-scale from [0,1] to [-1,1]
 
     lamb_obj = 1.0
     lamb_img = 0.1
@@ -187,9 +187,10 @@ def main(args):
         g_fake_img, g_fake_obj, g_fake_bkg, g_l1, g_vgg, g_ssim, g_rec_l1, g_rec_vgg, g_all = 0,0,0,0,0,0,0,0,0
         d1_real_acc_cnt, d1_fake_acc_cnt, d1_real_num_sample, d1_fake_num_sample = 0,0,0,0
         for idx, data in enumerate(dataloader):
-            [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
+            [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map, _ = data
             fire_images, label, bbox, weight_map = fire_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
-            non_fire_images, non_fire_crops = non_fire_images.cuda(),  non_fire_crops.cuda()
+            non_fire_images, non_fire_crops = non_fire_images.cuda(), non_fire_crops.cuda()
+            weight_map = torch.all(weight_map, dim=1, keepdim=True).expand(fire_images.shape)
             
             #fake image+objects
             if normalized:
@@ -336,7 +337,7 @@ def main(args):
                     rec_pixel_loss = l1_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
                     rec_feat_loss = vgg_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
 
-                g_loss = g_loss_fobj * lamb_obj + g_loss_fake * lamb_img + pixel_loss + feat_loss 
+                g_loss = g_loss_fobj * lamb_obj + g_loss_fake * lamb_img + feat_loss + pixel_loss
                 if use_bkg_net_D:
                     g_loss += g2_loss_fake * lamb_img
                 if use_ssim_net_G:
@@ -426,8 +427,8 @@ def main(args):
             
             for idx, data in enumerate(dataloader):
                 if idx == 0:
-                    [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
-                    label, bbox, weight_map = label[0:1].long().cuda().unsqueeze(-1), bbox[0:1].float(), weight_map[0:1].float().cuda()
+                    [fire_images, non_fire_images, non_fire_crops], label, bbox, _, _ = data
+                    label, bbox = label[0:1].long().cuda().unsqueeze(-1), bbox[0:1].float()
                     fire_images = fire_images[0:1].cuda()
                     non_fire_images = non_fire_images[0:1].cuda()
                     non_fire_crops = non_fire_crops[0:1].cuda()

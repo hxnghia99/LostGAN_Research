@@ -68,7 +68,10 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
     if input_img is None:
         temp_img = np.zeros([size[0]+50,size[1]+50,3])
     else:
-        num_c = input_img.shape[2]
+        try:
+            num_c = input_img.shape[2]
+        except:
+            num_c = 1
         temp_img = np.zeros([size[0]+50,size[1]+50,num_c])
         input_img = np.expand_dims(cv2.resize(input_img, size), axis=-1) if num_c==1 else cv2.resize(input_img, size)
         temp_img[25:25+size[0], 25:25+size[1],:] = input_img

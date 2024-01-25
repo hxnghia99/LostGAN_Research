@@ -25,7 +25,7 @@ class FireDataset(Dataset):
     def __init__(self, fire_image_dir, non_fire_image_dir, classname_file, image_size=(64, 64),
                  normalize_images=True, max_samples=None, min_object_size=0.02, max_object_size = 0.8,
                  min_objects_per_image=1, max_objects_per_image=2, left_right_flip=False, get_first_fire_smoke=False,
-                 use_noised_input=False, weight_map_type='extreme'):
+                 use_noised_input=False, weight_map_type='extreme', test=False):
         """
         A PyTorch Dataset for loading self-built fire dataset
     
@@ -51,6 +51,7 @@ class FireDataset(Dataset):
         self.left_right_flip =          left_right_flip
         self.use_noised_input =         use_noised_input
         self.weight_map_type =          weight_map_type
+        self.testing_phase =            test
         #Tranformation: Resize, ToTensor, Normalize
         self.set_image_size(image_size)
 
@@ -148,7 +149,7 @@ class FireDataset(Dataset):
             flip = True
         
         fire_image_file     = self.fire_image_files[index % self.len_fire]
-        non_fire_image_file = self.non_fire_image_files[random.randint(0, self.len_non_fire-1)]    
+        non_fire_image_file = self.non_fire_image_files[random.randint(0, self.len_non_fire-1) if not self.testing_phase else index % self.len_non_fire]    
 
         #Read image
         with open(fire_image_file, 'rb') as f:
@@ -213,17 +214,29 @@ class FireDataset(Dataset):
 
         #make weight for background / fire_region
         if self.weight_map_type == 'extreme':
-            weight_map = np.ones((3, self.image_size[0], self.image_size[1]))
-            for box in boxes:
-                xm, ym, w, h = [int(x*self.image_size[0]) for x in box]
-                weight_map[:,ym:ym+h,xm:xm+w] = 0
+            weight_map = np.ones((self.max_objects_per_image, self.image_size[0], self.image_size[1]))
+            weight_map_64 = np.ones((self.max_objects_per_image, int(self.image_size[0]/2), int(self.image_size[1]/2)))
+            for i, box in enumerate(boxes):
+                xm, ym, w, h = box
+                xmin = np.ceil(xm*self.image_size[0]).astype(np.int32)
+                ymin = np.ceil(ym*self.image_size[0]).astype(np.int32)
+                xmax = np.floor((xm+w)*self.image_size[0]).astype(np.int32)
+                ymax = np.floor((ym+h)*self.image_size[0]).astype(np.int32)
+                weight_map[i,ymin:ymax,xmin:xmax] = 0
+
+                xmin = np.ceil(xm*self.image_size[0]/2).astype(np.int32)
+                ymin = np.ceil(ym*self.image_size[0]/2).astype(np.int32)
+                xmax = np.floor((xm+w)*self.image_size[0]/2).astype(np.int32)
+                ymax = np.floor((ym+h)*self.image_size[0]/2).astype(np.int32)
+                weight_map_64[i,ymin:ymax,xmin:xmax] = 0
+
         elif self.weight_map_type == 'continuous':
-            weight_map = np.ones((3, self.image_size[0], self.image_size[1]))
+            weight_map = np.ones((self.max_objects_per_image, self.image_size[0], self.image_size[1]))
             for box in boxes:
                 xm, ym, w, h = [round(x*self.image_size[0]) for x in box]
                 continuous_map_2d = create_continuous_map(h, w)
                 continuous_map_3d = np.repeat(np.expand_dims(continuous_map_2d, axis=0), repeats=3, axis=0)
-                weight_map[:,ym:ym+h,xm:xm+w] = continuous_map_3d
+                weight_map[i,ym:ym+h,xm:xm+w] = continuous_map_3d
         else:
             raise NotImplemented("Not implement the weight map type as ['extreme', 'continuous'] ...")
 
@@ -254,7 +267,7 @@ class FireDataset(Dataset):
         # if cv2.waitKey() == ord('s'):
         #     print(fire_image_file)
 
-        return list_images, classes, boxes, weight_map
+        return list_images, classes, boxes, weight_map, weight_map_64
 
 def test_weight(image, weight):
     image = np.round((np.array(image)*0.5+0.5)*255).astype(np.uint8)

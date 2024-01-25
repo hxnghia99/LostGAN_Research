@@ -2,7 +2,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# from utils.bilinear import *
 
 class MaskRegressNet(nn.Module):
     def __init__(self, obj_feat=128, mask_size=16, map_size=64, normalized_data=True):
@@ -44,9 +43,9 @@ class MaskRegressNet(nn.Module):
         b, num_o, _ = bbox.size()
         x = self.fc(obj_feat)                           #linear mapping: [b*o, 128+180] --> [b*o, 256*4*4]
         x = self.conv1(x.view(b*num_o, 256, 4, 4))      #output [b*o, 256, 4, 4]     
-        x = F.interpolate(x, size=8, mode='bilinear')   #output [b*o, 256, 8, 8]     
+        x = F.interpolate(x, size=8, mode='nearest')   #output [b*o, 256, 8, 8]     
         x = self.conv2(x)                               #output [b*o, 256, 8, 8]     
-        x = F.interpolate(x, size=16, mode='bilinear')  #output [b*o, 256, 16, 16]     
+        x = F.interpolate(x, size=16, mode='nearest')  #output [b*o, 256, 16, 16]     
         x = self.conv3(x)                               #output [b*o, 1, 16, 16]     
         x = x.view(b, num_o, self.mask_size, self.mask_size)            
         #above: an encoding of z_obj_random+z_obj_class
@@ -76,7 +75,7 @@ class MaskRegressNet(nn.Module):
         img_in = masks.float().view(b*num_o, 1, M, M)   #from conv
         #input: [bo, 1, 16, 16], [bo, 64, 64, 2]
         # output[bo,:,64,64] is interpolated from size-2 vector grid[bo,h,w]
-        sampled = F.grid_sample(img_in, grid, mode='bilinear', align_corners=False)
+        sampled = F.grid_sample(img_in, grid, mode='nearest')
         #only have values at bbox_pos + information of class
         return sampled.view(b, num_o, H, W)
         
