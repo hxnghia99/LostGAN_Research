@@ -64,7 +64,7 @@ def truncted_random(z_obj_dim, num_o=8, thres=1.0, test=False):
     return z
 
 
-def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=None):
+def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=None, topleft_name=None):
     if input_img is None:
         temp_img = np.zeros([size[0]+50,size[1]+50,3])
     else:
@@ -75,6 +75,7 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
         temp_img = np.zeros([size[0]+50,size[1]+50,num_c])
         input_img = np.expand_dims(cv2.resize(input_img, size), axis=-1) if num_c==1 else cv2.resize(input_img, size)
         temp_img[25:25+size[0], 25:25+size[1],:] = input_img
+        temp_img = np.repeat(temp_img, repeats=3, axis=2) if num_c==1 else temp_img
      
     bbox = (bbox[0]*size[0]).numpy().astype(np.int32)
     label = label[0]
@@ -110,6 +111,11 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
         else:
             D_class_text = "Fake: {}%".format(D_class_score*100)
         cv2.putText(temp_img, D_class_text, (25,size[1]+50 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
+    
+    cv2.rectangle(temp_img, (25, 25), (25 + size[1], 25 + size[0]), (255,255,255), 1)
+        
+    if topleft_name is not None:
+        cv2.putText(temp_img,"| "+topleft_name, (int(size[0]/2)+25, size[1]+50 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
 
     return temp_img
 
@@ -130,3 +136,26 @@ def IS_compute_np(img: np.array):
     inception.update(img)
     mean, std_dev = inception.compute()
     return mean, std_dev
+
+
+def normalize_minmax(img, targe_range, input_range=None):
+    if input_range is None:
+        input_range = [img.min(), img.max()]
+    target_min, target_max = targe_range
+    current_min, current_max = input_range
+    return ((img-current_min)/(current_max-current_min))*target_max + target_min
+
+
+def combine_images(list_images, img_input_size):
+    x1wid = img_input_size[1]+50
+    x1hei = img_input_size[0]+50
+    x6wid = x1wid * 3
+    x6hei = x1hei * 2
+    
+    temp_img = np.zeros([x6hei, x6wid, 3], dtype=np.uint8)
+    for i, img in enumerate(list_images):
+        row = i // 3
+        col = i % 3
+        temp_img[x1hei*row:x1hei*(row+1), x1wid*col:x1wid*(col+1), :] = img
+    
+    return temp_img

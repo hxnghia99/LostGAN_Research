@@ -11,15 +11,10 @@ from data.data_loader import FireDataset
 from model.resnet_generator import ResnetGenerator128
 from model.rcnn_discriminator import CombineDiscriminator128
 
-from utils.util import draw_layout, IS_compute_np, truncted_random
+from utils.util import draw_layout, IS_compute_np, truncted_random, normalize_minmax, combine_images
 
 
 
-
-def normalize_minmax(img, targe_range):
-    target_min, target_max = targe_range
-    current_min, current_max = img.min(), img.max()
-    return ((img-current_min)/(current_max-current_min))*target_max + target_min
 
 def main(args):
     #Common
@@ -36,6 +31,7 @@ def main(args):
     z_obj_cls_dim = 128
     normalized = True
     z_obj_random_thres=2.0
+    args.seg_mask_thresh = 0.5
 
     phase_testing = True
 
@@ -109,8 +105,8 @@ def main(args):
     if save_results:
         id_img = 0
     for idx, data in enumerate(dataloader):
-        [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map, weight_map_64 = data
-        label, bbox, weight_map, weight_map_64 = label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda(), weight_map_64.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
+        [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
+        label, bbox, weight_map = label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
         fire_images = fire_images.cuda()
         non_fire_images = non_fire_images.cuda()
         non_fire_crops = non_fire_crops.cuda()
@@ -119,7 +115,8 @@ def main(args):
             z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=phase_testing)).float().cuda()
         else:
             z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
-        fake_images, stage_masks = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+        fake_images, stage_bbox_masks = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+        
         if not normalized:
             fake_images = fake_images*0.5+0.5
         g_out_fake, _ = netD(fake_images, bbox.cuda(), label)
@@ -127,62 +124,41 @@ def main(args):
 
         # fake_fire_crops = fake_images * weight_map
         
+        #1) fake-fire
         if not normalized:
             fake_images = (fake_images-0.5)*2
         fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fake_images = np.array(fake_images*255, np.uint8)
         g_out_fake  = g_out_fake[0,0].cpu().detach()
-        g_out_fake = -1 if g_out_fake<-1 else 1 if g_out_fake>1 else torch.round(g_out_fake,decimals=2)
-        fake_images = draw_layout(label, bbox, [256,256], class_names, input_img=fake_images, D_class_score=g_out_fake)
-
+        g_out_fake = -1 if g_out_fake>1 else 1 if g_out_fake<-1 else -torch.round(g_out_fake,decimals=2)
+        fake_images = draw_layout(label, bbox, [256,256], class_names, fake_images, g_out_fake, topleft_name='Fake-fire image')
+        #2) real-fire
         if not normalized:
             fire_images = (fire_images-0.5)*2
         fire_images = fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fire_images = np.array(fire_images*255, np.uint8)
         g_out_real  = g_out_real[0,0].cpu().detach()
         g_out_real = -1 if g_out_real<-1 else 1 if g_out_real>1 else torch.round(g_out_real,decimals=2)
-        fire_images = draw_layout(label, bbox, [256,256], class_names, input_img=fire_images, D_class_score=g_out_real)
-
+        fire_images = draw_layout(label, bbox, [256,256], class_names, fire_images, g_out_real, topleft_name='Real-fire image')
+        #3) non-fire
         if not normalized:
             non_fire_images = (non_fire_images-0.5)*2
         non_fire_images = non_fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         non_fire_images = np.array(non_fire_images*255, np.uint8)
-        non_fire_images = draw_layout(label, bbox, [256,256], class_names, input_img=non_fire_images)
-
-
-        none_mask   = normalize_minmax(stage_masks[0][0:1].cpu().detach().numpy().transpose(1,2,0), [0, 255])
-        none_mask   = draw_layout(label, bbox, [256,256], class_names, input_img=none_mask)
-        fire_mask   = normalize_minmax(stage_masks[0][1:2].cpu().detach().numpy().transpose(1,2,0), [0, 255])
-        fire_mask   = draw_layout(label, bbox, [256,256], class_names, input_img=fire_mask)
-        smoke_mask  = normalize_minmax(stage_masks[0][2:3].cpu().detach().numpy().transpose(1,2,0), [0, 255])
-        smoke_mask  = draw_layout(label, bbox, [256,256], class_names, input_img=smoke_mask)
-        # bkg_mask    = normalize_minmax(stage_masks[0][3:4].cpu().detach().numpy().transpose(1,2,0), [0, 255])
-        # bkg_mask    = draw_layout(label, bbox, [256,256], class_names, input_img=bkg_mask)
-        fire_seg    = cv2.resize((normalize_minmax(np.squeeze((stage_masks[0][1:2].cpu().detach().numpy().transpose(1,2,0))), [0, 255])>197.6).astype(np.uint8)*255 * (1-weight_map_64)[0][0].cpu().numpy(), (128,128))
-        fire_seg  = draw_layout(label, bbox, [256,256], class_names, input_img=fire_seg)
-
-        cv2.imshow("None mask", cv2.resize(none_mask.astype(np.uint8), (256, 256)))
-        cv2.imshow("Fire mask", cv2.resize(fire_mask.astype(np.uint8), (256, 256)))
-        cv2.imshow("Smoke mask", cv2.resize(smoke_mask.astype(np.uint8), (256, 256)))
-        cv2.imshow("Fire Seg", cv2.resize(fire_seg.astype(np.uint8), (256, 256)))
-        # cv2.imshow("Background mask", cv2.resize(bkg_mask.astype(np.uint8), (256, 256)))
-
-        # non_fire_crops = non_fire_crops[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
-        # non_fire_crops = np.array(non_fire_crops*255, np.uint8)
-        # non_fire_crops = draw_layout(label, bbox, [256,256], class_names, input_img=non_fire_crops)
-
-        # fake_fire_crops = fake_fire_crops[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
-        # weight_map = weight_map[0].cpu().detach().numpy().transpose(1, 2, 0)
-        # fake_fire_crops = np.array(fake_fire_crops*255, np.uint8) * weight_map
-        # fake_fire_crops = draw_layout(label, bbox, [256,256], class_names, input_img=fake_fire_crops)
-
+        non_fire_images = draw_layout(label, bbox, [256,256], class_names, non_fire_images, topleft_name='Non-fire image')
         
-        cv2.imshow("Non-fire", cv2.resize(cv2.cvtColor(non_fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
-        cv2.imshow("Fake-fire", cv2.resize(cv2.cvtColor(fake_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
-        cv2.imshow("Fire", cv2.resize(cv2.cvtColor(fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+        #Segmentation mask
+        stage_bbox_masks = stage_bbox_masks[0].cpu().detach().numpy()   #shape [3 objs, 128, 128]
+        #4) soft-mask
+        soft_mask = normalize_minmax(np.clip(np.sum(stage_bbox_masks[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+        soft_mask = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask, topleft_name='Soft seg-mask')
+        #5) hard-mask
+        hard_mask = np.array(np.all(stage_bbox_masks[0:2]>args.seg_mask_thresh, axis=0), dtype=np.uint8)
+        hard_mask = draw_layout(label, bbox, [256,256], class_names, input_img=hard_mask, topleft_name='Hard seg-mask')
 
-        # cv2.imshow("Non-fire-cropped", cv2.resize(cv2.cvtColor(non_fire_crops.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
-        # cv2.imshow("Fake-fire-cropped", cv2.resize(cv2.cvtColor(fake_fire_crops.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+        output_images = combine_images([fire_images, non_fire_images, fake_images, soft_mask, hard_mask], [256,256])
+
+        cv2.imshow("Test generating Fire + Mask", cv2.cvtColor(output_images.astype(np.uint8), cv2.COLOR_RGB2BGR))
         if cv2.waitKey() == 'q':
             pass
         

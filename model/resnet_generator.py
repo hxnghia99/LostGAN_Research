@@ -32,9 +32,9 @@ class ResnetGenerator128(nn.Module):
         self.res6 = ResBlock(ch*16, ch*16, upsample=True, num_w=z_obj_dim, num_classes=num_classes) #channel: 1024->1024
         self.res7 = ResBlock(ch*16, ch*8, upsample=True, num_w=z_obj_dim, num_classes=num_classes)  #channel: 1024->512
         self.res8 = ResBlock(ch*8, ch*4, upsample=True, num_w=z_obj_dim, num_classes=num_classes)  #channel: 512->256
-        self.res9 = ResBlock(ch*4, ch*2, upsample=True, num_w=z_obj_dim, num_classes=num_classes, psp_module=True)  #channel: 256->128
-        self.res10 = ResBlock(ch*2, ch*1, upsample=True, num_w=z_obj_dim, num_classes=num_classes, predict_mask=False)  #channel: 128->64
-        self.res11 = ResBlock_en(ch, ch)
+        self.res9 = ResBlock(ch*4, ch*2, upsample=True, num_w=z_obj_dim, num_classes=num_classes)#, psp_module=True)  #channel: 256->128
+        self.res10 = ResBlock(ch*2, ch*1, upsample=True, num_w=z_obj_dim, num_classes=num_classes, psp_module=True)#, predict_mask=False)  #channel: 128->64
+        self.res11 = ResBlock(ch*1, ch*1, upsample=False, num_w=z_obj_dim, num_classes=num_classes, predict_mask=False)
 
         self.final = nn.Sequential(nn.BatchNorm2d(ch),
                                    nn.ReLU(),
@@ -49,6 +49,7 @@ class ResnetGenerator128(nn.Module):
         self.alpha2 = nn.Parameter(torch.zeros(1, num_classes, 1))
         self.alpha3 = nn.Parameter(torch.zeros(1, num_classes, 1))
         self.alpha4 = nn.Parameter(torch.zeros(1, num_classes, 1))
+        self.alpha5 = nn.Parameter(torch.zeros(1, num_classes, 1))
         
         self.sigmoid = nn.Sigmoid()
         
@@ -167,13 +168,19 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
         alpha4 = torch.gather(self.sigmoid(self.alpha4).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='nearest') * (1 - alpha4) + seman_bbox * alpha4
-        x, _ = self.res10(x, latent_vector, stage_bbox)
+        x, stage_mask = self.res10(x, latent_vector, stage_bbox)
         x = x + x0
         #128x128x64
-        x = self.res11(x)
+        hh, ww = x.size(2), x.size(3)
+        seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
+        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
+        alpha5 = torch.gather(self.sigmoid(self.alpha5).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
+        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='nearest') * (1 - alpha5) + seman_bbox * alpha5
+        x, _ = self.res11(x, latent_vector, stage_bbox)
         # to RGB
         x = self.final(x)
-        return x, stage_mask
+        return x, stage_bbox
+        #stage_bbox: [b, 3 classes, 128, 128], values in range [0,1]
 
 
 

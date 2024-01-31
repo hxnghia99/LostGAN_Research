@@ -6,6 +6,7 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 
@@ -16,7 +17,7 @@ from data.cocostuff_loader import CocoSceneGraphDataset
 from data.data_loader import FireDataset
 from model.resnet_generator import ResnetGenerator128
 from model.rcnn_discriminator import CombineDiscriminator128, BkgResnetDiscriminator128
-from utils.util import VGGLoss, draw_layout, truncted_random
+from utils.util import VGGLoss, draw_layout, truncted_random, combine_images, normalize_minmax
 
 def add_normal_noise_input_D(images, mean=0, std=0.1):
     noise = torch.randn_like(images) * std + mean
@@ -48,33 +49,36 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
 
 def main(args):
     '''Configuration setup'''
+    debug_phase = False
     #Common
     args.mode = 'train'
-    args.batch_size = 12
-    args.total_epoch = 150
-    args.print_freq = 1
-    args.num_workers = 0
-    img_size = (args.img_size, args.img_size)
+    args.batch_size = 12 if not debug_phase else 4
+    args.total_epoch = 200
+    args.num_epoch_to_save = 5 if not debug_phase else 2
+    args.print_freq = 150 if not debug_phase else 1
+    args.num_workers = 4 if not debug_phase else 1
+    args.seg_mask_thresh = 0.5
     
     #Special : Test
     use_noised_input = False
     weight_map_type = 'extreme'
-    max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
-    get_first_fire_smoke = True if max_num_obj==2 else False
+    max_num_obj = 3                 #if max_obj=3, get only first fire and smoke
+    get_first_fire_smoke = True if max_num_obj==3 else False    #bboxes do not cover whole image --> add 1 __background__ class
     
-    use_ssim_net_G = False
-    use_bkg_net_D = False
+    use_ssim_net_G = True       #replace L1-loss by ssim-loss
+    use_bkg_net_D = True
     use_instance_noise_input_D = False
     use_accuracy_constrain_D = False
     use_identity_loss = False
+    use_weight_map_from_stage_bbox_masks = False
 
     #Model
     z_obj_random_dim = 128
     z_obj_cls_dim = 128
     normalized = True  #re-scale from [0,1] to [-1,1]
-
+    img_size = (args.img_size, args.img_size)
     lamb_obj = 1.0
-    lamb_img = 0.1
+    lamb_img = 0.05
     g_lr, d_lr = args.g_lr, args.d_lr
 
     #Training Initilization
@@ -103,7 +107,8 @@ def main(args):
                                 get_first_fire_smoke=get_first_fire_smoke,
                                 use_noised_input=use_noised_input,
                                 weight_map_type=weight_map_type,
-                                normalize_images=normalized)
+                                normalize_images=normalized,
+                                debug_phase=debug_phase)
 
         with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
             class_names = f.read().splitlines()
@@ -169,6 +174,8 @@ def main(args):
     for epoch in range(args.total_epoch):
         netG.train()
         netD.train()
+        if epoch >= 150:
+            use_weight_map_from_stage_bbox_masks = True
         if use_bkg_net_D:
             netD2.train()
         else:
@@ -178,19 +185,21 @@ def main(args):
             g2_loss_fake = torch.tensor([0])
         if not use_ssim_net_G:
             ssim_loss = torch.tensor([0])
+        else:
+            pixel_loss = torch.tensor([0])
         if not use_identity_loss:
             rec_pixel_loss = torch.tensor([0])
             rec_feat_loss = torch.tensor([0])
-
+        pixel_loss = torch.tensor([0])
         d1_real_img, d1_real_obj, d1_fake_img, d1_fake_obj, d1_all = 0,0,0,0,0
         d2_real_bkg, d2_fake_bkg, d2_all = 0,0,0
         g_fake_img, g_fake_obj, g_fake_bkg, g_l1, g_vgg, g_ssim, g_rec_l1, g_rec_vgg, g_all = 0,0,0,0,0,0,0,0,0
         d1_real_acc_cnt, d1_fake_acc_cnt, d1_real_num_sample, d1_fake_num_sample = 0,0,0,0
         for idx, data in enumerate(dataloader):
-            [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map, _ = data
+            [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
             fire_images, label, bbox, weight_map = fire_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
             non_fire_images, non_fire_crops = non_fire_images.cuda(), non_fire_crops.cuda()
-            weight_map = torch.all(weight_map, dim=1, keepdim=True).expand(fire_images.shape)
+            weight_map = torch.all(weight_map, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
             
             #fake image+objects
             if normalized:
@@ -198,7 +207,11 @@ def main(args):
             else:
                 z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
 
-            fake_images, _ = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
+            fake_images, stage_bbox_masks = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
+            stage_bbox_masks = F.interpolate(stage_bbox_masks, size=img_size, mode="nearest")
+            weight_map_from_stage_bbox_masks = 1 - torch.unsqueeze(torch.logical_or(stage_bbox_masks[:,0,:,:]>args.seg_mask_thresh, stage_bbox_masks[:,1,:,:]>args.seg_mask_thresh).type(torch.cuda.FloatTensor), dim=1)
+            weight_map_from_stage_bbox_masks = weight_map_from_stage_bbox_masks.expand(stage_bbox_masks.shape[0], 3, stage_bbox_masks.shape[2], stage_bbox_masks.shape[3])
+
             if not normalized:
                 fake_images = fake_images*0.5+0.5   #scale to [0,1]
 
@@ -282,15 +295,15 @@ def main(args):
                 netD2.zero_grad()
                 #real bkg
                 if use_instance_noise_input_D:
-                    d2_out_real = netD2(add_normal_noise_input_D(non_fire_crops))
+                    d2_out_real = netD2(add_normal_noise_input_D(non_fire_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks)))
                 else:
-                    d2_out_real = netD2(non_fire_crops)
+                    d2_out_real = netD2(non_fire_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks))
                 d2_loss_real = torch.nn.ReLU()(1.0 - d2_out_real).mean()
                 #fake bkg
                 if use_instance_noise_input_D:
-                    d2_out_fake = netD2(add_normal_noise_input_D(fake_images.detach()*weight_map))
+                    d2_out_fake = netD2(add_normal_noise_input_D(fake_images.detach()*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks)))
                 else:
-                    d2_out_fake = netD2(fake_images.detach()*weight_map)
+                    d2_out_fake = netD2(fake_images.detach()*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks))
                 d2_loss_fake = torch.nn.ReLU()(1.0 + d2_out_fake).mean()
 
                 d2_loss = lamb_img * (d2_loss_real + d2_loss_fake)
@@ -318,18 +331,19 @@ def main(args):
                 #Adversarial loss from D2
                 if use_bkg_net_D:
                     if use_instance_noise_input_D:
-                        g2_out_fake = netD2(add_normal_noise_input_D(fake_images*weight_map))
+                        g2_out_fake = netD2(add_normal_noise_input_D(fake_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks)))
                     else:
-                        g2_out_fake = netD2(fake_images*weight_map)
+                        g2_out_fake = netD2(fake_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks))
                     g2_loss_fake = - g2_out_fake.mean()
 
                 #structure similarity loss
                 if use_ssim_net_G:
-                    ssim_loss = ssim((fake_images*0.5+0.5)*weight_map, (non_fire_images*0.5+0.5)*weight_map)
+                    ssim_loss = ssim((fake_images*0.5+0.5)*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks), (non_fire_images*0.5+0.5)*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks))
+                else:
+                    pixel_loss = l1_loss(fake_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks), non_fire_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks)).mean()
 
                 #background reconstruction loss
-                pixel_loss = l1_loss(fake_images*weight_map, non_fire_images*weight_map).mean()
-                feat_loss = vgg_loss(fake_images*weight_map, non_fire_images*weight_map).mean()
+                feat_loss = vgg_loss(fake_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks), non_fire_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks)).mean()
 
                 #Identity loss
                 if use_identity_loss:
@@ -337,11 +351,13 @@ def main(args):
                     rec_pixel_loss = l1_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
                     rec_feat_loss = vgg_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
 
-                g_loss = g_loss_fobj * lamb_obj + g_loss_fake * lamb_img + feat_loss + pixel_loss
+                g_loss = g_loss_fobj * lamb_obj + g_loss_fake * lamb_img + feat_loss
                 if use_bkg_net_D:
                     g_loss += g2_loss_fake * lamb_img
                 if use_ssim_net_G:
                     g_loss += ssim_loss
+                else:
+                    g_loss += pixel_loss
                 if use_identity_loss:
                     g_loss += (rec_pixel_loss + rec_feat_loss) * lamb_img * 0.2
 
@@ -421,13 +437,13 @@ def main(args):
         writer.add_scalar("epoch_d1_accuracy/d1_total_acc", (d1_real_acc_cnt+d1_fake_acc_cnt)/(d1_real_num_sample+d1_fake_num_sample), global_step=epoch+1)
 
         # save model
-        if (epoch + 1) % 5 == 0:
+        if (epoch + 1) % args.num_epoch_to_save == 0:
             torch.save(netG.state_dict(), os.path.join(args.out_path, 'model/', 'G_%d.pth' % (epoch+1)))
             torch.save(netD.state_dict(), os.path.join(args.out_path, 'model/', 'D_%d.pth' % (epoch+1)))
             
             for idx, data in enumerate(dataloader):
                 if idx == 0:
-                    [fire_images, non_fire_images, non_fire_crops], label, bbox, _, _ = data
+                    [fire_images, non_fire_images, non_fire_crops], label, bbox, _ = data
                     label, bbox = label[0:1].long().cuda().unsqueeze(-1), bbox[0:1].float()
                     fire_images = fire_images[0:1].cuda()
                     non_fire_images = non_fire_images[0:1].cuda()
@@ -441,39 +457,49 @@ def main(args):
             #Network() processing    
             netG.eval()
             netD.eval()
-            fake_images, _ = netG.forward(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+            fake_images, stage_bbox_masks = netG.forward(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
             if not normalized:
                 fake_images = fake_images*0.5+0.5
             g_out_fake, _ = netD(fake_images, bbox.cuda(), label)
             g_out_real, _ = netD(fire_images, bbox.cuda(), label)
 
             #Img_show() processing
+            #1) fake-fire
             if not normalized:
                 fake_images = (fake_images-0.5)*2
             fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             fake_images = np.array(fake_images*255, np.uint8)
             g_out_fake  = g_out_fake[0,0].cpu().detach()
-            g_out_fake = -1 if g_out_fake<-1 else 1 if g_out_fake>1 else torch.round(g_out_fake,decimals=2)
-            fake_images = draw_layout(label, bbox, [256,256], class_names, fake_images, g_out_fake)
-
+            g_out_fake = -1 if g_out_fake>1 else 1 if g_out_fake<-1 else -torch.round(g_out_fake,decimals=2)
+            fake_images = draw_layout(label, bbox, [256,256], class_names, fake_images, g_out_fake, topleft_name='Fake-fire image')
+            #2) real-fire
             if not normalized:
                 fire_images = (fire_images-0.5)*2
             fire_images = fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             fire_images = np.array(fire_images*255, np.uint8)
             g_out_real  = g_out_real[0,0].cpu().detach()
             g_out_real = -1 if g_out_real<-1 else 1 if g_out_real>1 else torch.round(g_out_real,decimals=2)
-            fire_images = draw_layout(label, bbox, [256,256], class_names, fire_images)
-
+            fire_images = draw_layout(label, bbox, [256,256], class_names, fire_images, g_out_real, topleft_name='Real-fire image')
+            #3) non-fire
             if not normalized:
                 non_fire_images = (non_fire_images-0.5)*2
             non_fire_images = non_fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
             non_fire_images = np.array(non_fire_images*255, np.uint8)
-            non_fire_images = draw_layout(label, bbox, [256,256], class_names, non_fire_images)
+            non_fire_images = draw_layout(label, bbox, [256,256], class_names, non_fire_images, topleft_name='Non-fire image')
+            
+            #Segmentation mask
+            stage_bbox_masks = stage_bbox_masks[0].cpu().detach().numpy()   #shape [3 objs, 128, 128]
+            #4) soft-mask
+            soft_mask = normalize_minmax(np.clip(np.sum(stage_bbox_masks[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+            soft_mask = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask, topleft_name='Soft seg-mask')
+            #5) hard-mask
+            hard_mask = np.array(np.all(stage_bbox_masks[0:2]>args.seg_mask_thresh, axis=0), dtype=np.uint8)
+            hard_mask = draw_layout(label, bbox, [256,256], class_names, input_img=hard_mask, topleft_name='Hard seg-mask')
 
-            cv2.imwrite(args.out_path+"samples/"+ 'G_%d_real-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
-            cv2.imwrite(args.out_path+"samples/"+ 'G_%d_fake-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(fake_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
-            cv2.imwrite(args.out_path+"samples/"+ 'G_%d_non-fire.png'%(epoch+1), cv2.resize(cv2.cvtColor(non_fire_images.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+            output_images = combine_images([fire_images, non_fire_images, fake_images, soft_mask, hard_mask], [256,256])
 
+            cv2.imwrite(args.out_path+"samples/"+ 'G_epoch_%d.png'%(epoch+1), cv2.cvtColor(output_images.astype(np.uint8), cv2.COLOR_RGB2BGR))
+            
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
