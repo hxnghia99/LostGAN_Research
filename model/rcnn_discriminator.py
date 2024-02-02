@@ -117,20 +117,23 @@ class ResnetDiscriminator128(nn.Module):
 class ResBlock(nn.Module):
     def __init__(self, in_ch, out_ch, ksize=3, pad=1, downsample=False):
         super(ResBlock, self).__init__()
-        self.conv1 = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
-        self.conv2 = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
+        self.conv1 = nn.Sequential(nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4),
+                                   nn.BatchNorm2d(out_ch))
+        self.conv2 = nn.Sequential(nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4),
+                                   nn.BatchNorm2d(out_ch))
         self.activation = nn.ReLU()
         self.downsample = downsample
         self.learnable_sc = (in_ch != out_ch) or downsample
         if self.learnable_sc:
-            self.conv_sc = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=1, padding=0), eps=1e-4)
+            self.conv_sc = nn.Sequential(nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=1, padding=0), eps=1e-4),
+                                         nn.BatchNorm2d(out_ch))
 
     def residual(self, in_feat):
         x = in_feat
-        x = self.conv1(self.activation(x))
-        x = self.conv2(self.activation(x))
+        x = self.activation(self.conv1(self.activation(x)))
         if self.downsample:
             x = F.avg_pool2d(x, 2)
+        x = self.conv2(x)
         return x
 
     def shortcut(self, x):
@@ -144,16 +147,20 @@ class ResBlock(nn.Module):
         return self.residual(in_feat) + self.shortcut(in_feat)
 
 
-#Residual block: not using activation function in the 2nd conv (main branch), shortcut: conv after downsampling
+#Residual block: not using activation function in the 2nd conv (main branch), shortcut: conv before downsampling
 class OptimizedBlock(nn.Module):
     def __init__(self, in_ch, out_ch, ksize=3, pad=1, downsample=False):
         super(OptimizedBlock, self).__init__()
-        self.conv1 = nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
-        self.conv2 = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
-        self.conv3 = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
-        self.conv_sc = nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=1, padding=0), eps=1e-4)
+        self.conv1 = nn.Sequential(nn.utils.spectral_norm(nn.Conv2d(in_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4),  #added to convert 3 channels to 64 channels
+                                   nn.BatchNorm2d(out_ch))
+        self.conv2 = nn.Sequential(nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4),
+                                   nn.BatchNorm2d(out_ch))
+        self.conv3 = nn.Sequential(nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4),
+                                   nn.BatchNorm2d(out_ch))
         self.activation = nn.ReLU()
         self.downsample = downsample
+        self.conv_sc = nn.Sequential(nn.utils.spectral_norm(nn.Conv2d(out_ch, out_ch, kernel_size=1, padding=0), eps=1e-4),
+                                        nn.BatchNorm2d(out_ch))
     
     def shortcut(self, x):
         x = self.conv_sc(x)
@@ -164,7 +171,7 @@ class OptimizedBlock(nn.Module):
     def forward(self, in_feat):
         x1 = self.activation(self.conv1(in_feat))  #RGB -> 64 channels
         x = self.activation(self.conv2(x1))
-        x = self.conv3(x)
         if self.downsample:
             x = F.avg_pool2d(x, 2)
+        x = self.conv3(x)
         return x + self.shortcut(x1)

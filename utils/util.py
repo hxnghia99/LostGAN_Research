@@ -109,7 +109,7 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
         if D_class_score>=0:
             D_class_text = "Real: {}%".format(D_class_score*100)
         else:
-            D_class_text = "Fake: {}%".format(D_class_score*100)
+            D_class_text = "Fake: {}%".format(-D_class_score*100)
         cv2.putText(temp_img, D_class_text, (25,size[1]+50 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
     
     cv2.rectangle(temp_img, (25, 25), (25 + size[1], 25 + size[0]), (255,255,255), 1)

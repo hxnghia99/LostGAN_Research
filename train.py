@@ -52,7 +52,7 @@ def main(args):
     debug_phase = False
     #Common
     args.mode = 'train'
-    args.batch_size = 12 if not debug_phase else 4
+    args.batch_size = 16 if not debug_phase else 4
     args.total_epoch = 200
     args.num_epoch_to_save = 5 if not debug_phase else 2
     args.print_freq = 150 if not debug_phase else 1
@@ -62,11 +62,11 @@ def main(args):
     #Special : Test
     use_noised_input = False
     weight_map_type = 'extreme'
-    max_num_obj = 3                 #if max_obj=3, get only first fire and smoke
-    get_first_fire_smoke = True if max_num_obj==3 else False    #bboxes do not cover whole image --> add 1 __background__ class
+    max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
+    get_first_fire_smoke = True if max_num_obj==2 else False    #bboxes do not cover whole image --> add 1 __background__ class
     
-    use_ssim_net_G = True       #replace L1-loss by ssim-loss
-    use_bkg_net_D = True
+    use_ssim_net_G = False       #replace L1-loss by ssim-loss
+    use_bkg_net_D = False
     use_instance_noise_input_D = False
     use_accuracy_constrain_D = False
     use_identity_loss = False

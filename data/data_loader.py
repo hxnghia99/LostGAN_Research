@@ -100,7 +100,7 @@ class FireDataset(Dataset):
                         new_objects.append(object)
             annotation_data['objects'] = new_objects
             #0 objects or >max objects --> remove image
-            if len(new_objects)<min_objects_per_image or len(new_objects)>max_objects_per_image-1:  #max - 1 : do not count __background__ class
+            if len(new_objects)<min_objects_per_image or len(new_objects)>max_objects_per_image:  #max - 1 : do not count __background__ class
                 filtered_annotation_flag[idx] = False
             else:    
                 annotation_datas.append(annotation_data)
@@ -256,7 +256,7 @@ class FireDataset(Dataset):
             # else:    
             #     classes.append(self.vocal['_None_'])
             #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-            classes.append(self.vocal['_background_'])
+            classes.append(self.vocal['_None_'])
             boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
 
         classes = torch.LongTensor(classes)
