@@ -43,9 +43,9 @@ class MaskRegressNet(nn.Module):
         b, num_o, _ = bbox.size()
         x = self.fc(obj_feat)                           #linear mapping: [b*o, 128+180] --> [b*o, 256*4*4]
         x = self.conv1(x.view(b*num_o, 256, 4, 4))      #output [b*o, 256, 4, 4]     
-        x = F.interpolate(x, size=8, mode='nearest')   #output [b*o, 256, 8, 8]     
+        x = F.interpolate(x, size=8, mode='bilinear')   #output [b*o, 256, 8, 8]     
         x = self.conv2(x)                               #output [b*o, 256, 8, 8]     
-        x = F.interpolate(x, size=16, mode='nearest')  #output [b*o, 256, 16, 16]     
+        x = F.interpolate(x, size=16, mode='bilinear')  #output [b*o, 256, 16, 16]     
         x = self.conv3(x)                               #output [b*o, 1, 16, 16]     
         x = x.view(b, num_o, self.mask_size, self.mask_size)            
         #above: an encoding of z_obj_random+z_obj_class

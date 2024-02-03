@@ -128,11 +128,12 @@ class SpatialAdaptiveBatchNorm2d(nn.BatchNorm2d):
                 exponential_average_factor = self.momentum
             
         #output feature map
-        output = F.batch_norm(x, self.running_mean, self.running_var, self.weight, self.bias, self.training or not self.track_running_stats, exponential_average_factor, self.eps)
+        output = F.batch_norm(x, self.running_mean, self.running_var, self.weight, self.bias, 
+                              self.training or not self.track_running_stats, exponential_average_factor, self.eps)
 
         b, o, _, _ = bbox_class_mask.size()
         _, _, h, w = x.size()
-        bbox_class_mask = F.interpolate(bbox_class_mask, size=(h,w), mode="nearest")
+        bbox_class_mask = F.interpolate(bbox_class_mask, size=(h,w), mode="bilinear")
         #calculate weight and bias
         weight, bias = self.weight_proj(vector), self.bias_proj(vector)
         weight, bias = weight.view(b, o, -1), bias.view(b, o, -1)
