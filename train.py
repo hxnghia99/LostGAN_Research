@@ -493,7 +493,8 @@ def main(args):
             soft_mask = normalize_minmax(np.clip(np.sum(stage_bbox_masks[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
             soft_mask = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask, topleft_name='Soft seg-mask')
             #5) hard-mask
-            hard_mask = np.array(np.all(stage_bbox_masks[0:2]>args.seg_mask_thresh, axis=0), dtype=np.uint8)
+            hard_mask = np.array(np.any(stage_bbox_masks[0:2]>args.seg_mask_thresh, axis=0), dtype=np.uint8)
+            hard_mask = normalize_minmax(hard_mask, [0, 255], input_range=[0,1])
             hard_mask = draw_layout(label, bbox, [256,256], class_names, input_img=hard_mask, topleft_name='Hard seg-mask')
 
             output_images = combine_images([fire_images, non_fire_images, fake_images, soft_mask, hard_mask], [256,256])
