@@ -34,6 +34,7 @@ class ResnetGenerator128(nn.Module):
         self.res8 = ResBlock(ch*8, ch*4, upsample=True, num_w=z_obj_dim, num_classes=num_classes)  #channel: 512->256
         self.res9 = ResBlock(ch*4, ch*2, upsample=True, num_w=z_obj_dim, num_classes=num_classes, psp_module=True)  #channel: 256->128
         self.res10 = ResBlock(ch*2, ch*1, upsample=True, num_w=z_obj_dim, num_classes=num_classes, predict_mask=False)  #channel: 128->64
+        self.res11 = ResBlock_en(ch*1, ch*1)
 
         self.final = nn.Sequential(nn.BatchNorm2d(ch),
                                    nn.ReLU(),
@@ -173,6 +174,7 @@ class ResnetGenerator128(nn.Module):
         x, _ = self.res10(x, latent_vector, stage_bbox)
         # x = torch.concat([x, x0], dim=1)
         x = x + x0
+        x = self.res11(x)
         # to RGB
         x = self.final(x)
         return x, F.interpolate(stage_bbox, size=(hh*2,ww*2), mode="bilinear") #inside AdaptiveNorm: stage_mask is resized double to use
