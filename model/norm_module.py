@@ -105,9 +105,9 @@ class AdaptiveBatchNorm2d(nn.BatchNorm2d):
 
 #Spatial Adaptive Batch Normalization
 class SpatialAdaptiveBatchNorm2d(nn.BatchNorm2d):
-    def __init__(self, num_features, num_w=512, eps=1e-5, momentum=0.1, affine=False, track_running_stats=True):
+    def __init__(self, num_features, num_w=512, eps=1e-5, momentum=0.1, affine=False, track_running_stats=True, last_ISLA=False):
         super(SpatialAdaptiveBatchNorm2d, self).__init__(num_features, eps, momentum, affine, track_running_stats)
-
+        self.last_ISLA = last_ISLA
         #projection layer: (d_e + d_obj) x 2C in paper --> 1C for weight, 1C for bias
         self.weight_proj    = nn.Linear(num_w, num_features)        #num_w->in_channels
         self.bias_proj      = nn.Linear(num_w, num_features)   
@@ -133,7 +133,7 @@ class SpatialAdaptiveBatchNorm2d(nn.BatchNorm2d):
 
         b, o, _, _ = bbox_class_mask.size()
         _, _, h, w = x.size()
-        bbox_class_mask = F.interpolate(bbox_class_mask, size=(h,w), mode="bilinear")
+        bbox_class_mask = F.interpolate(bbox_class_mask, size=(h,w), mode="bilinear" if self.last_ISLA else "nearest")
         #calculate weight and bias: channel-wise beta & gamma in paper-LostGANv1
         weight, bias = self.weight_proj(vector), self.bias_proj(vector)
         weight, bias = weight.view(b, o, -1), bias.view(b, o, -1)

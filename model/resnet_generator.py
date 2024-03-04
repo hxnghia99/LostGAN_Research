@@ -6,18 +6,26 @@ from .norm_module import SpatialAdaptiveBatchNorm2d
 from .mask_regression import MaskRegressNet
 
 class ResnetGenerator128(nn.Module):
-    def __init__(self, ch=64, z_obj_random_dim=128, z_obj_class_dim=128, num_classes=184, output_dim=3, mask_size=16, map_size=64, input_dim=3, normalized_data=True):
+    def __init__(self, ch=64, z_obj_random_dim=128, z_obj_class_dim=128, num_classes=184, output_dim=3, mask_size=16, map_size=64, input_dim=3, 
+                 enc_feat_as_bkg_noise=False, random_input_noise=False):
         super(ResnetGenerator128, self).__init__()
         
         self.mask_size = mask_size
         self.map_size = map_size
+        self.enc_feat_as_bkg_noise = enc_feat_as_bkg_noise
+        self.random_input_noise = random_input_noise
 
         #z_obj_random + z_cls -> z_obj (latent_vector)
         self.label_embedding = nn.Embedding(num_classes, embedding_dim=z_obj_class_dim)   #Embedding matrix W shaped [num_class x z_obj_class_dim]
         z_obj_dim = z_obj_random_dim + z_obj_class_dim
-        
-        self.z_random_dim = z_obj_random_dim
-        self.fc = nn.utils.spectral_norm(nn.Linear(self.z_random_dim, 4*4*16*ch))
+
+        if enc_feat_as_bkg_noise:
+            self.z_obj_random_dim = z_obj_random_dim
+            self.fc_enc_feat_for_embedding = nn.utils.spectral_norm(nn.Linear(4*4*16*ch, z_obj_random_dim))
+
+        if random_input_noise:
+            self.z_obj_random_dim = z_obj_random_dim
+            self.fc = nn.utils.spectral_norm(nn.Linear(self.z_obj_random_dim, 4*4*16*ch))
 
         #encoder path
         self.res0 = OptimizedBlock_en(input_dim, ch, downsample=False)
@@ -29,7 +37,7 @@ class ResnetGenerator128(nn.Module):
         # self.activation = nn.ReLU()
 
         #decoder path
-        self.res6 = ResBlock(ch*16, ch*16, upsample=True, num_w=z_obj_dim, num_classes=num_classes) #channel: 1024->1024
+        self.res6 = ResBlock(ch*16 if not random_input_noise else ch*32, ch*16, mid_ch=ch*16, upsample=True, num_w=z_obj_dim, num_classes=num_classes) #channel: 1024->1024
         self.res7 = ResBlock(ch*16, ch*8, upsample=True, num_w=z_obj_dim, num_classes=num_classes)  #channel: 1024->512
         self.res8 = ResBlock(ch*8, ch*4, upsample=True, num_w=z_obj_dim, num_classes=num_classes)  #channel: 512->256
         self.res9 = ResBlock(ch*4, ch*2, upsample=True, num_w=z_obj_dim, num_classes=num_classes, psp_module=True)  #channel: 256->128
@@ -52,7 +60,7 @@ class ResnetGenerator128(nn.Module):
         
         self.sigmoid = nn.Sigmoid()
         
-        self.mask_regress = MaskRegressNet(obj_feat=z_obj_dim, mask_size=mask_size, map_size=map_size, normalized_data=normalized_data)
+        self.mask_regress = MaskRegressNet(obj_feat_dim=z_obj_dim, mask_size=mask_size, map_size=map_size)
         self.init_parameter()
         
 
@@ -63,7 +71,7 @@ class ResnetGenerator128(nn.Module):
             if k[0][-4:] == 'bias':
                 torch.nn.init.constant_(k[1], 0)
 
-    def _bbox_mask_generator(self, z_obj, bbox, H, W):
+    def _bbox_mask_generator(self, bbox, H, W):
         b, o, _ = bbox.size()
         bo = b*o
 
@@ -75,8 +83,8 @@ class ResnetGenerator128(nn.Module):
         ym = ym.contiguous().view(bo, 1).expand(bo, W)
         hh = hh.contiguous().view(bo, 1).expand(bo, W)
 
-        X = torch.linspace(0, 1, steps=W).view(1, W).expand(bo, W).cuda(device=z_obj.device)
-        Y = torch.linspace(0, 1, steps=H).view(1, H).expand(bo, H).cuda(device=z_obj.device)
+        X = torch.linspace(0, 1, steps=W).view(1, W).expand(bo, W).cuda(device=bbox.device)
+        Y = torch.linspace(0, 1, steps=H).view(1, H).expand(bo, H).cuda(device=bbox.device)
 
         X = (X - xm) / ww       #([bo, W] - [bo, H])/[bo, H]
         Y = (Y - ym) / hh       #([bo, H] - [bo, W])/[bo, W]
@@ -101,25 +109,9 @@ class ResnetGenerator128(nn.Module):
 
     def forward(self, z_img, z_obj, bbox, class_label):
         b, o = z_obj.size(0), z_obj.size(1)
-        class_label_embedding = self.label_embedding(class_label)       #class-based one-hot vector -> vector [128]
+        class_label_embedding = self.label_embedding(class_label)               #class-based one-hot vector -> vector [128]
 
-        z_obj = z_obj.view(b*o, -1)     #[b*o, 128]
-        class_label_embedding = class_label_embedding.view(b*o, -1) #[b*o, 180]
-
-        latent_vector = torch.concat((z_obj, class_label_embedding), dim=1).view(b, o, -1)  #[b, o_label, 128+180]
-        latent_vector = self.mapping(latent_vector.view(b*o, -1))      #identity mapping at the momemt
-
-        # preprocess bbox -> mask with information of bbox + class: value inside bbox in range [-1, 1], outside 0
-        bbox_class_mask = self.mask_regress(latent_vector, bbox)      #encoding latent_vector+bbox --> [b, o_label, H(64), W(64)] / value in range [0, 1]
-        
-        # if z_img is None:
-        #     z_img = torch.randn((b, self.z_random_dim)).cuda()  #shape [b, 128]
-        
-        bbox_only_mask = self._bbox_mask_generator(z_obj, bbox, self.map_size, self.map_size)   #extreme case: 0 outside, 1 inside bbox
-
-        # #4x4
-        # x = self.fc(z_img).view(b, -1, 4, 4)        #map [b,128]->[b, 4*4*16*64] --> [b, 1024, 4, 4]
-
+        #Encoder
         x0 = self.res0(z_img)      # 128x128x64
         x1 = self.res1(x0)     # 64x64x128
         x2 = self.res2(x1)    # 32x32x256
@@ -128,9 +120,29 @@ class ResnetGenerator128(nn.Module):
         x = self.res5(x4)      # 4x4x1024
         # x = self.activation(x)  # [batch, 1024, 4, 4]
 
-        # z_2 = torch.randn((b, self.z_random_dim)).cuda()  #shape [b, 128]
-        # x_2 = self.fc(z_2).view(b, -1, 4, 4)     
-        # x = torch.concat([x,x_2], dim=1)
+        #concatenating the random input noise with encoded features from encoder
+        if self.random_input_noise:
+            x_input_random = torch.randn((b, self.z_obj_random_dim)).cuda()  #shape [b, 128]
+            x_input_random = self.fc(x_input_random).view(b, -1, 4, 4)     
+            x = torch.concat([x, x_input_random], dim=1)
+
+        if self.enc_feat_as_bkg_noise:
+            z_bkg_obj = self.fc_enc_feat_for_embedding(x.view(b,-1)).view(b,1,self.z_obj_random_dim)   #output [b,1,128]
+            z_obj[:,2:3,:] = z_bkg_obj
+
+        z_obj = z_obj.view(b*o, -1)     #[b*o, 128]
+        class_label_embedding = class_label_embedding.view(b*o, -1)             #[b*o, 180]
+
+        latent_vector = torch.concat((z_obj, class_label_embedding), dim=1)     #[b*o_label, 128+180]
+        latent_vector = self.mapping(latent_vector)                             #identity mapping at the momemt
+
+        # preprocess bbox -> mask with information of bbox + class: value inside bbox in range [-1, 1], outside 0
+        bbox_class_mask = self.mask_regress(latent_vector, bbox)      #encoding latent_vector+bbox --> [b, o_label, H(64), W(64)] / value in range [0, 1]
+        
+        # if z_img is None:
+        #     z_img = torch.randn((b, self.z_obj_random_dim)).cuda()  #shape [b, 128]
+        
+        bbox_only_mask = self._bbox_mask_generator(bbox, self.map_size, self.map_size)   #extreme case: 0 outside, 1 inside bbox
 
         """Iterative process in 1 ResBlock:
         1) Use bbox_class_mask (b, o_label, H, W) for ResBlock : stage_mask (b, o_cate, H, W)
@@ -196,7 +208,7 @@ class ResBlock(nn.Module):
         self.conv1 = nn.utils.spectral_norm(nn.Conv2d(in_ch, self.mid_ch, kernel_size=ksize, padding=pad), eps=1e-4)
         self.conv2 = nn.utils.spectral_norm(nn.Conv2d(self.mid_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
         self.b1 = SpatialAdaptiveBatchNorm2d(in_ch, num_w=num_w)
-        self.b2 = SpatialAdaptiveBatchNorm2d(self.mid_ch, num_w=num_w)
+        self.b2 = SpatialAdaptiveBatchNorm2d(self.mid_ch, num_w=num_w, last_ISLA=True)
         self.activation = nn.ReLU()
 
         #learnable_shortcut if upsamping or in_c!=out_c
@@ -224,7 +236,7 @@ class ResBlock(nn.Module):
         x = self.activation(x)
         #if upsampling
         if self.upsample:
-            x = F.interpolate(x, scale_factor=2, mode='nearest')
+            x = F.interpolate(x, scale_factor=2, mode='bilinear' if not self.predict_mask else 'nearest')
         #spectral(conv) + Ada-bat + activation
         x = self.conv1(x)
         x = self.b2(x, latent_vector, bbox_class_mask)
@@ -236,7 +248,7 @@ class ResBlock(nn.Module):
     def shortcut(self, x):
         if self.learnable_sc:
             if self.upsample:
-                x = F.interpolate(x, scale_factor=2, mode='nearest')
+                x = F.interpolate(x, scale_factor=2, mode='bilinear' if not self.predict_mask else 'nearest')
             x = self.c_sc(x)
         return x
 

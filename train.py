@@ -50,28 +50,33 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
 
 def main(args):
     '''Configuration setup'''
-    debug_phase = False
+    debug_phase = True
     #Common
     args.mode = 'train'
     args.batch_size = 16 if not debug_phase else 4
-    args.total_epoch = 200
+    args.total_epoch = 200 if not debug_phase else 10
     args.num_epoch_to_save = 5 if not debug_phase else 2
     args.print_freq = 150 if not debug_phase else 1
     args.num_workers = 4 if not debug_phase else 1
     args.seg_mask_thresh = 0.5
+
+    #Special configurations: Developing phase
+    use_noise_in_crop = False       #Erase area inside bboxes and add random noises there   
+    weight_map_type = 'extreme'     #'extreme' creates weight_map 0 inside/1 outside bboxes
     
-    #Special : Test
-    use_noised_input = False
-    weight_map_type = 'extreme'
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
-    get_first_fire_smoke = True if max_num_obj==2 else False    #bboxes do not cover whole image --> add 1 __background__ class
-    
-    use_ssim_net_G = False       #replace L1-loss by ssim-loss
-    use_bkg_net_D = False
-    use_instance_noise_input_D = False
-    use_accuracy_constrain_D = False
-    use_identity_loss = False
-    use_weight_map_from_stage_bbox_masks = False
+    get_first_fire_smoke = True if max_num_obj==2 else False    
+    use_bkg_cls = True             #bboxes do not cover whole image --> True: add 1 bkg_cls + bkg_noise_embedding_input as random
+    if use_bkg_cls: max_num_obj = 3
+
+    use_bkg_net_D = True                           #use bkg_D for background region
+    use_instance_noise_input_D = False              #add Gaussian noise to input of D
+    use_accuracy_constrain_D = False                #constraint the accuracy of whole_D: 0.8
+    use_ssim_net_G = False                          #replace L1-loss by ssim-loss
+    use_identity_loss = False                       #Later: use identity loss when input as fire-images
+    use_weight_map_from_stage_bbox_masks = False    #use bbox_masks to define weight_map again with threshold as 0.5
+    use_enc_feat_as_bkg_cls_noise = True           #transform encoded features using FC to bkg_cls noise input
+    use_random_input_noise_w_enc_feat = False       #Later: use random input noise concatenating with enc_feat
 
     #Model
     z_obj_random_dim = 128
@@ -79,7 +84,8 @@ def main(args):
     normalized = True  #re-scale from [0,1] to [-1,1]
     img_size = (args.img_size, args.img_size)
     lamb_obj = 1.0
-    lamb_img = 0.05
+    lamb_img = 0.1
+    lamb_iden = 0.2
     g_lr, d_lr = args.g_lr, args.d_lr
 
     #Training Initilization
@@ -99,14 +105,15 @@ def main(args):
         train_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_A")
         train_non_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
-        num_classes = 3
+        num_classes = 3 if not use_bkg_cls else 4
+        
         
         train_data = FireDataset(fire_image_dir=train_fire_img_dir, non_fire_image_dir=train_non_fire_img_dir, 
                                 classname_file=classname_file,
                                 image_size=img_size, left_right_flip=True,
                                 max_objects_per_image=max_num_obj,
                                 get_first_fire_smoke=get_first_fire_smoke,
-                                use_noised_input=use_noised_input,
+                                use_noise_in_crop=use_noise_in_crop,
                                 weight_map_type=weight_map_type,
                                 normalize_images=normalized,
                                 debug_phase=debug_phase)
@@ -119,7 +126,8 @@ def main(args):
     dataloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, drop_last=True, shuffle=True, num_workers=args.num_workers)
 
     #Model
-    netG = ResnetGenerator128(num_classes=num_classes, output_dim=3, z_obj_random_dim=z_obj_random_dim, z_obj_class_dim=z_obj_cls_dim, normalized_data=normalized).cuda()
+    netG = ResnetGenerator128(num_classes=num_classes, output_dim=3, z_obj_random_dim=z_obj_random_dim, z_obj_class_dim=z_obj_cls_dim, 
+                              enc_feat_as_bkg_noise=use_enc_feat_as_bkg_cls_noise, random_input_noise=use_random_input_noise_w_enc_feat).cuda()
     netD = CombineDiscriminator128(num_classes=num_classes).cuda()
     if use_bkg_net_D:
         netD2 = BkgResnetDiscriminator128(num_classes=num_classes).cuda()
@@ -175,7 +183,7 @@ def main(args):
     for epoch in range(args.total_epoch):
         netG.train()
         netD.train()
-        if epoch >= 150:
+        if epoch >= 200:
             use_weight_map_from_stage_bbox_masks = True
         if use_bkg_net_D:
             netD2.train()
@@ -184,37 +192,37 @@ def main(args):
             d2_loss_fake = torch.tensor([0])
             d2_loss = torch.tensor([0])
             g2_loss_fake = torch.tensor([0])
-        if not use_ssim_net_G:
-            ssim_loss = torch.tensor([0])
+        if use_ssim_net_G:
+            pixel_loss = torch.tensor([0])     
         else:
-            pixel_loss = torch.tensor([0])
+            ssim_loss = torch.tensor([0])
         if not use_identity_loss:
             rec_pixel_loss = torch.tensor([0])
             rec_feat_loss = torch.tensor([0])
-        pixel_loss = torch.tensor([0])
-        d1_real_img, d1_real_obj, d1_fake_img, d1_fake_obj, d1_all = 0,0,0,0,0
-        d2_real_bkg, d2_fake_bkg, d2_all = 0,0,0
-        g_fake_img, g_fake_obj, g_fake_bkg, g_l1, g_vgg, g_ssim, g_rec_l1, g_rec_vgg, g_all = 0,0,0,0,0,0,0,0,0
+        
+        d1_real_img, d1_real_obj, d1_fake_img, d1_fake_obj, d1_all = 0,0,0,0,0                                  #losses D1
+        d2_real_bkg, d2_fake_bkg, d2_all = 0,0,0                                                                #losses D2
+        g_fake_img, g_fake_obj, g_fake_bkg, g_l1, g_vgg, g_ssim, g_rec_l1, g_rec_vgg, g_all = 0,0,0,0,0,0,0,0,0 #losses G
         d1_real_acc_cnt, d1_fake_acc_cnt, d1_real_num_sample, d1_fake_num_sample = 0,0,0,0
+        
         for idx, data in enumerate(dataloader):
-            [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
-            fire_images, label, bbox, weight_map = fire_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
-            non_fire_images, non_fire_crops = non_fire_images.cuda(), non_fire_crops.cuda()
+            [fire_images, non_fire_images, _], label, bbox, weight_map = data
+            fire_images, non_fire_images, label, bbox, weight_map = fire_images.cuda(), non_fire_images.cuda(), label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
+            #weight_map for only 2 objects (also in case 3 objects)
             weight_map = torch.all(weight_map, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
             
             #fake image+objects
-            if normalized:
-                z_obj = torch.randn(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()     #[batch, num_obj, 128]
-            else:
-                z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
+            if normalized:  z_obj = torch.randn(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()     #[batch, num_obj, 128]
+            else:           z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
 
             fake_images, stage_bbox_masks = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
-            stage_bbox_masks = F.interpolate(stage_bbox_masks, size=img_size, mode="nearest")
+            stage_bbox_masks = F.interpolate(stage_bbox_masks, size=img_size, mode="bilinear")
+            #Code later: depending on number of classes (2 or 3)
             weight_map_from_stage_bbox_masks = 1 - torch.unsqueeze(torch.logical_or(stage_bbox_masks[:,0,:,:]>args.seg_mask_thresh, stage_bbox_masks[:,1,:,:]>args.seg_mask_thresh).type(torch.cuda.FloatTensor), dim=1)
             weight_map_from_stage_bbox_masks = weight_map_from_stage_bbox_masks.expand(stage_bbox_masks.shape[0], 3, stage_bbox_masks.shape[2], stage_bbox_masks.shape[3])
 
             if not normalized:
-                fake_images = fake_images*0.5+0.5   #scale to [0,1]
+                fake_images = fake_images*0.5+0.5   #G_last_layer as Tanh() - scale [-1, 1] -> scale to [0,1]
 
             if use_accuracy_constrain_D:
                 with torch.no_grad():
@@ -250,7 +258,7 @@ def main(args):
                     d_loss.backward()
                     d_optimizer.step()
             
-            else:
+            else: #normal training of D
                 # update D network
                 netD.zero_grad()
                 #real image+objects
@@ -360,7 +368,7 @@ def main(args):
                 else:
                     g_loss += pixel_loss
                 if use_identity_loss:
-                    g_loss += (rec_pixel_loss + rec_feat_loss) * lamb_img * 0.2
+                    g_loss += (rec_pixel_loss + rec_feat_loss) * lamb_img * lamb_iden
 
                 g_loss.backward()
                 g_optimizer.step()
@@ -449,18 +457,15 @@ def main(args):
                     fire_images = fire_images[0:1].cuda()
                     non_fire_images = non_fire_images[0:1].cuda()
                     non_fire_crops = non_fire_crops[0:1].cuda()
-                    if normalized:
-                        z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=2.0)).float().cuda()
-                    else:
-                        z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
+                    if normalized:  z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=2.0)).float().cuda()
+                    else:           z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
                     break
 
             #Network() processing    
             netG.eval()
             netD.eval()
             fake_images, stage_bbox_masks = netG.forward(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
-            if not normalized:
-                fake_images = fake_images*0.5+0.5
+            if not normalized: fake_images = fake_images*0.5+0.5        #Tanh() scale [-1,1] to [0,1]
             g_out_fake, _ = netD(fake_images, bbox.cuda(), label)
             g_out_real, _ = netD(fire_images, bbox.cuda(), label)
 

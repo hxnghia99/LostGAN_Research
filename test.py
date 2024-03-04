@@ -24,9 +24,13 @@ def main(args):
     img_size = (args.img_size, args.img_size)
 
     #Special: Test
-    use_noised_input = False
-    max_num_obj = 4                 #if max_obj=2, get only first fire and smoke
-    get_first_fire_smoke = True if max_num_obj==4 else False
+    max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
+    get_first_fire_smoke = True if max_num_obj==2 else False    
+    use_bkg_cls = False             #bboxes do not cover whole image --> True: add 1 bkg_cls + bkg_noise_embedding_input as random
+    if use_bkg_cls: max_num_obj = 3
+    use_enc_feat_as_bkg_cls_noise = False           #transform encoded features using FC to bkg_cls noise input
+    use_random_input_noise_w_enc_feat = False       #Later: use random input noise concatenating with enc_feat
+    
     z_obj_random_dim = 128
     z_obj_cls_dim = 128
     normalized = True
@@ -57,11 +61,12 @@ def main(args):
         val_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_A")
         val_non_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
-        num_classes = 13
+        num_classes = 3
+        if use_bkg_cls: num_classes+=1
+
         train_data = FireDataset(fire_image_dir=val_fire_img_dir, non_fire_image_dir=val_non_fire_img_dir,
                                 classname_file=classname_file,
-                                image_size=img_size, left_right_flip=False,
-                                use_noised_input=use_noised_input,
+                                image_size=img_size,
                                 max_objects_per_image=max_num_obj,
                                 get_first_fire_smoke=get_first_fire_smoke,
                                 normalize_images=normalized,
@@ -76,7 +81,8 @@ def main(args):
     dataloader = torch.utils.data.DataLoader(train_data, batch_size=1, drop_last=True, shuffle=False, num_workers=0)#num_workers=args.num_workers)
 
 
-    netG = ResnetGenerator128(num_classes=num_classes, output_dim=3, z_obj_random_dim=z_obj_random_dim, z_obj_class_dim=z_obj_cls_dim, normalized_data=normalized).cuda()
+    netG = ResnetGenerator128(num_classes=num_classes, output_dim=3, z_obj_random_dim=z_obj_random_dim, z_obj_class_dim=z_obj_cls_dim,
+                              enc_feat_as_bkg_noise=use_enc_feat_as_bkg_cls_noise, random_input_noise=use_random_input_noise_w_enc_feat).cuda()
     netD = CombineDiscriminator128(num_classes=num_classes).cuda()
 
     if not os.path.isfile(args.G_path):
@@ -105,11 +111,10 @@ def main(args):
     if save_results:
         id_img = 0
     for idx, data in enumerate(dataloader):
-        [fire_images, non_fire_images, non_fire_crops], label, bbox, weight_map = data
+        [fire_images, non_fire_images, _], label, bbox, weight_map = data
         label, bbox, weight_map = label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
         fire_images = fire_images.cuda()
         non_fire_images = non_fire_images.cuda()
-        non_fire_crops = non_fire_crops.cuda()
 
         if normalized:
             z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=phase_testing)).float().cuda()

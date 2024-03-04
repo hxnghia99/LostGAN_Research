@@ -25,7 +25,7 @@ class FireDataset(Dataset):
     def __init__(self, fire_image_dir, non_fire_image_dir, classname_file, image_size=(64, 64),
                  normalize_images=True, max_samples=None, min_object_size=0.02, max_object_size = 0.8,
                  min_objects_per_image=1, max_objects_per_image=2, left_right_flip=False, get_first_fire_smoke=False,
-                 use_noised_input=False, weight_map_type='extreme', test=False, debug_phase=False):
+                 use_noise_in_crop=False, weight_map_type='extreme', test=False, debug_phase=False):
         """
         A PyTorch Dataset for loading self-built fire dataset
     
@@ -49,7 +49,7 @@ class FireDataset(Dataset):
         self.max_objects_per_image =    max_objects_per_image
         self.normalize_images =         normalize_images
         self.left_right_flip =          left_right_flip
-        self.use_noised_input =         use_noised_input
+        self.use_noise_in_crop =        use_noise_in_crop
         self.weight_map_type =          weight_map_type
         self.testing_phase =            test
         self.debug_phase =              debug_phase
@@ -102,7 +102,7 @@ class FireDataset(Dataset):
                         new_objects.append(object)
             annotation_data['objects'] = new_objects
             #0 objects or >max objects --> remove image
-            if len(new_objects)<min_objects_per_image or len(new_objects)>max_objects_per_image:  #max - 1 : do not count __background__ class
+            if len(new_objects)<min_objects_per_image or len(new_objects)>max_objects_per_image:  #max_obj can be 2 or 3
                 filtered_annotation_flag[idx] = False
             else:    
                 annotation_datas.append(annotation_data)
@@ -119,7 +119,7 @@ class FireDataset(Dataset):
         print('The program called set_image_size() : ', image_size)
         transform = [T.Resize(image_size, interpolation=T.InterpolationMode.BILINEAR), T.ToTensor()]    #toTensor(): Normalize (0, 1)
         if self.normalize_images:
-            transform.append(T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD))
+            transform.append(T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)) #Normalize to (-1,1)
         self.transform = T.Compose(transform)       #used in __getitem__()
         self.image_size = image_size
 
@@ -195,7 +195,7 @@ class FireDataset(Dataset):
             xmax = np.floor(xm+w).astype(np.int32)
             ymax = np.floor(ym+h).astype(np.int32)
             #create noise
-            if self.use_noised_input:
+            if self.use_noise_in_crop:
                 noise = np.random.randint(0, 2, (ymax-ymin+1, xmax-xmin+1, 1), dtype=np.uint8) * 255
                 noise = np.repeat(noise, repeats=3, axis=2)
                 noise = PIL.Image.fromarray(noise, 'RGB')
@@ -221,10 +221,9 @@ class FireDataset(Dataset):
             h = (h) / HF
             boxes.append(np.array([xm, ym, w, h]))
 
-        #make weight for background / fire_region
+        #make weight for background / fire_region: 1 outside, 0 inside
         if self.weight_map_type == 'extreme':
             weight_map = np.ones((self.max_objects_per_image, self.image_size[0], self.image_size[1]))
-            # weight_map_div2 = np.ones((self.max_objects_per_image, int(self.image_size[0]/2), int(self.image_size[1]/2)))
             for i, box in enumerate(boxes):
                 xm, ym, w, h = box
                 xmin = np.ceil(xm*self.image_size[0]).astype(np.int32)
@@ -233,13 +232,6 @@ class FireDataset(Dataset):
                 ymax = np.floor((ym+h)*self.image_size[0]).astype(np.int32)
                 #weight_map by number_bboxes
                 weight_map[i,ymin:ymax+1,xmin:xmax+1] = 0                       
-
-                # xmin = np.ceil(xm*self.image_size[0]/2).astype(np.int32)
-                # ymin = np.ceil(ym*self.image_size[0]/2).astype(np.int32)
-                # xmax = np.floor((xm+w)*self.image_size[0]/2).astype(np.int32)
-                # ymax = np.floor((ym+h)*self.image_size[0]/2).astype(np.int32)
-                # weight_map_div2[i,ymin:ymax+1,xmin:xmax+1] = 0
-
         elif self.weight_map_type == 'continuous':
             weight_map = np.ones((self.max_objects_per_image, self.image_size[0], self.image_size[1]))
             for box in boxes:
@@ -252,14 +244,14 @@ class FireDataset(Dataset):
 
         # If less then 8 objects, add 0 class_id and unused bbox as background
         for idx in range(len(objects), self.max_objects_per_image):
-            # if idx+1 == self.max_objects_per_image:
-            #     classes.append(self.vocal['background'])
-            #     boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
-            # else:    
-            #     classes.append(self.vocal['_None_'])
-            #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-            classes.append(self.vocal['_None_'])
-            boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            if idx+1 == self.max_objects_per_image and self.max_objects_per_image==3:   #if max_obj==3: add bkg_obj covering whole_image
+                classes.append(self.vocal['background'])
+                boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
+            else:    
+                classes.append(self.vocal['_None_'])
+                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            # classes.append(self.vocal['_None_'])
+            # boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
 
         classes = torch.LongTensor(classes)
         boxes = np.vstack(boxes)
@@ -277,7 +269,7 @@ class FireDataset(Dataset):
         # if cv2.waitKey() == ord('s'):
         #     print(fire_image_file)
 
-        return list_images, classes, boxes, weight_map#, weight_map_div2
+        return list_images, classes, boxes, weight_map
 
 def test_weight(image, weight):
     image = np.round((np.array(image)*0.5+0.5)*255).astype(np.uint8)

@@ -4,13 +4,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class MaskRegressNet(nn.Module):
-    def __init__(self, obj_feat=128, mask_size=16, map_size=64, normalized_data=True):
+    def __init__(self, obj_feat_dim=128, mask_size=16, map_size=64):
         super(MaskRegressNet, self).__init__()
         self.mask_size = mask_size
         self.map_size = map_size
-        self.normalized_data = normalized_data
         
-        self.fc = nn.utils.spectral_norm(nn.Linear(obj_feat, 256*4*4))  #z_obj_dim -> 256x4x4 (4096)
+        self.fc = nn.utils.spectral_norm(nn.Linear(obj_feat_dim, 256*4*4))  #z_obj_dim -> 256x4x4 (4096)
 
         conv1 = list()
         conv1.append(nn.utils.spectral_norm(nn.Conv2d(256, 256, kernel_size=3, padding=1)))
@@ -107,7 +106,5 @@ class MaskRegressNet(nn.Module):
         grid = torch.stack([X, Y], axis=3)  # (num_bo, H, W, 2)
 
         #Values at bbox_pos in range [0, 1], others <0 or >1
-        #Transform grid to scale [-1, 1]
-        if self.normalized_data:
-            grid = grid.mul(2).sub(1)
+        grid = grid.mul(2).sub(1)   #Transform grid to scale [-1, 1] for next grid_sample()
         return grid
