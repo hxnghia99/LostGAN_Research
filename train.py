@@ -50,7 +50,7 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
 
 def main(args):
     '''Configuration setup'''
-    debug_phase = True
+    debug_phase = False
     #Common
     args.mode = 'train'
     args.batch_size = 16 if not debug_phase else 4
@@ -66,7 +66,7 @@ def main(args):
     
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
     get_first_fire_smoke = True if max_num_obj==2 else False    
-    use_bkg_cls = True             #bboxes do not cover whole image --> True: add 1 bkg_cls + bkg_noise_embedding_input as random
+    use_bkg_cls = False             #bboxes do not cover whole image --> True: add 1 bkg_cls + bkg_noise_embedding_input as random
     if use_bkg_cls: max_num_obj = 3
 
     use_bkg_net_D = True                           #use bkg_D for background region
@@ -75,7 +75,7 @@ def main(args):
     use_ssim_net_G = False                          #replace L1-loss by ssim-loss
     use_identity_loss = False                       #Later: use identity loss when input as fire-images
     use_weight_map_from_stage_bbox_masks = False    #use bbox_masks to define weight_map again with threshold as 0.5
-    use_enc_feat_as_bkg_cls_noise = True           #transform encoded features using FC to bkg_cls noise input
+    use_enc_feat_as_bkg_cls_noise = False           #transform encoded features using FC to bkg_cls noise input
     use_random_input_noise_w_enc_feat = False       #Later: use random input noise concatenating with enc_feat
 
     #Model
@@ -105,8 +105,8 @@ def main(args):
         train_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_A")
         train_non_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
-        num_classes = 3 if not use_bkg_cls else 4
-        
+        num_classes = 3
+        if use_bkg_cls: num_classes+=1
         
         train_data = FireDataset(fire_image_dir=train_fire_img_dir, non_fire_image_dir=train_non_fire_img_dir, 
                                 classname_file=classname_file,
@@ -254,7 +254,7 @@ def main(args):
                     d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
                     d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
 
-                    d_loss = lamb_obj * (d_loss_robj + d_loss_fobj) + lamb_img * (d_loss_real + d_loss_fake)
+                    d_loss = lamb_obj * (d_loss_robj + d_loss_fobj) + (lamb_img/2) * (d_loss_real + d_loss_fake)
                     d_loss.backward()
                     d_optimizer.step()
             
@@ -276,7 +276,7 @@ def main(args):
                 d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
                 d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
 
-                d_loss = lamb_obj * (d_loss_robj + d_loss_fobj) + lamb_img * (d_loss_real + d_loss_fake)
+                d_loss = lamb_obj * (d_loss_robj + d_loss_fobj) + (lamb_img/2) * (d_loss_real + d_loss_fake)
                 d_loss.backward()
                 d_optimizer.step()
 
@@ -287,16 +287,16 @@ def main(args):
             d1_real_num_sample += d_out_real.shape[0]
             d1_fake_num_sample += d_out_fake.shape[0]
 
-            writer.add_scalar("iter_d1_loss/d1_real_img", d_loss_real*lamb_img, global_step=global_steps)
-            writer.add_scalar("iter_d1_loss/d1_fake_img", d_loss_fake*lamb_img, global_step=global_steps)
-            writer.add_scalar("iter_d1_loss/d1_real_obj", d_loss_robj*lamb_obj, global_step=global_steps)
-            writer.add_scalar("iter_d1_loss/d1_fake_obj", d_loss_fobj*lamb_obj, global_step=global_steps)
+            writer.add_scalar("iter_d1_loss/d1_real_img", d_loss_real*(lamb_img/2), global_step=global_steps)
+            writer.add_scalar("iter_d1_loss/d1_fake_img", d_loss_fake*(lamb_img/2), global_step=global_steps)
+            writer.add_scalar("iter_d1_loss/d1_real_obj", d_loss_robj*(lamb_img/2), global_step=global_steps)
+            writer.add_scalar("iter_d1_loss/d1_fake_obj", d_loss_fobj*(lamb_img/2), global_step=global_steps)
             writer.add_scalar("iter_d1_loss/d1_total", d_loss, global_step=global_steps)
             
-            d1_real_img += d_loss_real*lamb_img
-            d1_fake_img += d_loss_fake*lamb_img
-            d1_real_obj += d_loss_robj*lamb_obj
-            d1_fake_obj += d_loss_fobj*lamb_obj
+            d1_real_img += d_loss_real*(lamb_img/2)
+            d1_fake_img += d_loss_fake*(lamb_img/2)
+            d1_real_obj += d_loss_robj*(lamb_img/2)
+            d1_fake_obj += d_loss_fobj*(lamb_img/2)
             d1_all += d_loss
 
             if use_bkg_net_D:
@@ -360,7 +360,7 @@ def main(args):
                     rec_pixel_loss = l1_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
                     rec_feat_loss = vgg_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
 
-                g_loss = g_loss_fobj * lamb_obj + g_loss_fake * lamb_img + feat_loss
+                g_loss = g_loss_fobj * lamb_obj + g_loss_fake * (lamb_img/2) + feat_loss
                 if use_bkg_net_D:
                     g_loss += g2_loss_fake * lamb_img
                 if use_ssim_net_G:
@@ -373,7 +373,7 @@ def main(args):
                 g_loss.backward()
                 g_optimizer.step()
 
-                writer.add_scalar("iter_g_loss/g_fake_img", g_loss_fake*lamb_img, global_step=global_steps)
+                writer.add_scalar("iter_g_loss/g_fake_img", g_loss_fake*(lamb_img/2), global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_fake_obj", g_loss_fobj*lamb_obj, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_fake_bkg", g2_loss_fake*lamb_img, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_l1", pixel_loss, global_step=global_steps)
@@ -382,7 +382,7 @@ def main(args):
                 writer.add_scalar("iter_g_loss/g_rec_l1", rec_pixel_loss, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_rec_vgg", rec_feat_loss, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_total", g_loss, global_step=global_steps)
-                g_fake_img += g_loss_fake*lamb_img
+                g_fake_img += g_loss_fake*(lamb_img/2)
                 g_fake_obj += g_loss_fobj*lamb_obj
                 g_fake_bkg += g2_loss_fake*lamb_img
                 g_l1 += pixel_loss
