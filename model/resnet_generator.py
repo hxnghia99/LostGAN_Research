@@ -16,8 +16,8 @@ class ResnetGenerator128(nn.Module):
         self.label_embedding = nn.Embedding(num_classes, embedding_dim=z_obj_class_dim)   #Embedding matrix W shaped [num_class x z_obj_class_dim]
         z_obj_dim = z_obj_random_dim + z_obj_class_dim
         
-        # self.z_random_dim = z_obj_random_dim
-        # self.fc = nn.utils.spectral_norm(nn.Linear(self.z_random_dim, 4*4*16*ch))
+        self.z_random_dim = z_obj_random_dim
+        self.fc = nn.utils.spectral_norm(nn.Linear(self.z_random_dim, 4*4*16*ch))
 
         #encoder path
         self.res0 = OptimizedBlock_en(input_dim, ch, downsample=False)
@@ -127,6 +127,10 @@ class ResnetGenerator128(nn.Module):
         x4 = self.res4(x3)      # 8x8x1024
         x = self.res5(x4)      # 4x4x1024
         # x = self.activation(x)  # [batch, 1024, 4, 4]
+
+        # z_2 = torch.randn((b, self.z_random_dim)).cuda()  #shape [b, 128]
+        # x_2 = self.fc(z_2).view(b, -1, 4, 4)     
+        # x = torch.concat([x,x_2], dim=1)
 
         """Iterative process in 1 ResBlock:
         1) Use bbox_class_mask (b, o_label, H, W) for ResBlock : stage_mask (b, o_cate, H, W)

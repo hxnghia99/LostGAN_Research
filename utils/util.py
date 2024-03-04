@@ -156,6 +156,8 @@ def combine_images(list_images, img_input_size):
     for i, img in enumerate(list_images):
         row = i // 3
         col = i % 3
+        if row==1:
+            col+=1
         temp_img[x1hei*row:x1hei*(row+1), x1wid*col:x1wid*(col+1), :] = img
     
     return temp_img

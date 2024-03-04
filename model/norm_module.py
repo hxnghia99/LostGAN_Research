@@ -129,15 +129,15 @@ class SpatialAdaptiveBatchNorm2d(nn.BatchNorm2d):
             
         #output feature map
         output = F.batch_norm(x, self.running_mean, self.running_var, self.weight, self.bias, 
-                              self.training or not self.track_running_stats, exponential_average_factor, self.eps)
+                              self.training or not self.track_running_stats, exponential_average_factor, self.eps)  #eq.(2) in paper-LostGANv1
 
         b, o, _, _ = bbox_class_mask.size()
         _, _, h, w = x.size()
         bbox_class_mask = F.interpolate(bbox_class_mask, size=(h,w), mode="bilinear")
-        #calculate weight and bias
+        #calculate weight and bias: channel-wise beta & gamma in paper-LostGANv1
         weight, bias = self.weight_proj(vector), self.bias_proj(vector)
         weight, bias = weight.view(b, o, -1), bias.view(b, o, -1)
-
+        
         weight = torch.sum(bbox_class_mask.unsqueeze(2) * weight.unsqueeze(-1).unsqueeze(-1), dim=1, keepdim=False) / \
                  (torch.sum(bbox_class_mask.unsqueeze(2), dim=1, keepdim=False) + 1e-6) \
                  + 1

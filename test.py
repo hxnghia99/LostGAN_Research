@@ -19,14 +19,14 @@ from utils.util import draw_layout, IS_compute_np, truncted_random, normalize_mi
 def main(args):
     #Common
     args.mode = 'train'
-    args.G_path = "./outputs/model_test/HXNGHIA/G_150.pth"
-    args.D_path = "./outputs/model_test/HXNGHIA/D_150.pth"
+    args.G_path = "./outputs/model_test/019_FireGAN_add_10cls/G_80.pth"
+    args.D_path = "./outputs/model_test/019_FireGAN_add_10cls/D_80.pth"
     img_size = (args.img_size, args.img_size)
 
     #Special: Test
     use_noised_input = False
-    max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
-    get_first_fire_smoke = True if max_num_obj==2 else False
+    max_num_obj = 4                 #if max_obj=2, get only first fire and smoke
+    get_first_fire_smoke = True if max_num_obj==4 else False
     z_obj_random_dim = 128
     z_obj_cls_dim = 128
     normalized = True
@@ -57,7 +57,7 @@ def main(args):
         val_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_A")
         val_non_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_B")
         classname_file  = os.path.join(dataset_path, "class_names.txt")
-        num_classes = 3
+        num_classes = 13
         train_data = FireDataset(fire_image_dir=val_fire_img_dir, non_fire_image_dir=val_non_fire_img_dir,
                                 classname_file=classname_file,
                                 image_size=img_size, left_right_flip=False,

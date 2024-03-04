@@ -1,4 +1,4 @@
-Dependency Version:
+Requirements:
 - Python: 3.9
 - Torch: 1.13.1
 - Cuda: 11.6.3

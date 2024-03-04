@@ -96,6 +96,8 @@ class FireDataset(Dataset):
                         elif not secnd_obj and object['class_name']=='smoke':
                             secnd_obj = True
                             new_objects.append(object)
+                        elif object['class_name'] not in ['fire', 'smoke']:
+                            new_objects.append(object)
                     else:
                         new_objects.append(object)
             annotation_data['objects'] = new_objects

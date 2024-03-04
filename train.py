@@ -19,6 +19,7 @@ from model.resnet_generator import ResnetGenerator128
 from model.rcnn_discriminator import CombineDiscriminator128, BkgResnetDiscriminator128
 from utils.util import VGGLoss, draw_layout, truncted_random, combine_images, normalize_minmax
 
+
 def add_normal_noise_input_D(images, mean=0, std=0.1):
     noise = torch.randn_like(images) * std + mean
     noisy_images = images + noise
