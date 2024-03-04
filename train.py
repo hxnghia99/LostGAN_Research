@@ -50,7 +50,7 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
 
 def main(args):
     '''Configuration setup'''
-    debug_phase = False
+    debug_phase = True
     #Common
     args.mode = 'train'
     args.batch_size = 16 if not debug_phase else 4
@@ -193,16 +193,18 @@ def main(args):
             d2_loss = torch.tensor([0])
             g2_loss_fake = torch.tensor([0])
         if use_ssim_net_G:
-            pixel_loss = torch.tensor([0])     
+            pixel_loss = torch.tensor([0])
+            obj_pixel_loss = torch.tensor([0])     
         else:
             ssim_loss = torch.tensor([0])
+            obj_ssim_loss = torch.tensor([0])
         if not use_identity_loss:
             rec_pixel_loss = torch.tensor([0])
             rec_feat_loss = torch.tensor([0])
         
         d1_real_img, d1_real_obj, d1_fake_img, d1_fake_obj, d1_all = 0,0,0,0,0                                  #losses D1
         d2_real_bkg, d2_fake_bkg, d2_all = 0,0,0                                                                #losses D2
-        g_fake_img, g_fake_obj, g_fake_bkg, g_l1, g_vgg, g_ssim, g_rec_l1, g_rec_vgg, g_all = 0,0,0,0,0,0,0,0,0 #losses G
+        g_fake_img, g_fake_obj, g_fake_bkg, g_l1, g_vgg, g_ssim, g_obj_l1, g_obj_vgg, g_obj_ssim, g_rec_l1, g_rec_vgg, g_all = 0,0,0,0,0,0,0,0,0,0,0,0 #losses G
         d1_real_acc_cnt, d1_fake_acc_cnt, d1_real_num_sample, d1_fake_num_sample = 0,0,0,0
         
         for idx, data in enumerate(dataloader):
@@ -348,11 +350,14 @@ def main(args):
                 #structure similarity loss
                 if use_ssim_net_G:
                     ssim_loss = ssim((fake_images*0.5+0.5)*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks), (non_fire_images*0.5+0.5)*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks))
+                    obj_ssim_loss = ssim((fake_images*0.5+0.5)*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks), (fire_images*0.5+0.5)*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks))
                 else:
                     pixel_loss = l1_loss(fake_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks), non_fire_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks)).mean()
+                    obj_pixel_loss = l1_loss(fake_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks), fire_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks)).mean()
 
-                #background reconstruction loss
+                #reconstruction loss
                 feat_loss = vgg_loss(fake_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks), non_fire_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks)).mean()
+                obj_feat_loss = vgg_loss(fake_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks), fire_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks)).mean()
 
                 #Identity loss
                 if use_identity_loss:
@@ -360,13 +365,13 @@ def main(args):
                     rec_pixel_loss = l1_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
                     rec_feat_loss = vgg_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
 
-                g_loss = g_loss_fobj * lamb_obj + g_loss_fake * (lamb_img/2) + feat_loss
+                g_loss = g_loss_fobj * lamb_obj + g_loss_fake * (lamb_img/2) + feat_loss + obj_feat_loss
                 if use_bkg_net_D:
                     g_loss += g2_loss_fake * lamb_img
                 if use_ssim_net_G:
-                    g_loss += ssim_loss
+                    g_loss += ssim_loss + obj_ssim_loss
                 else:
-                    g_loss += pixel_loss
+                    g_loss += pixel_loss + obj_pixel_loss
                 if use_identity_loss:
                     g_loss += (rec_pixel_loss + rec_feat_loss) * lamb_img * lamb_iden
 
@@ -379,6 +384,9 @@ def main(args):
                 writer.add_scalar("iter_g_loss/g_l1", pixel_loss, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_vgg", feat_loss, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_ssim", ssim_loss, global_step=global_steps)
+                writer.add_scalar("iter_g_loss/obj_g_l1", obj_pixel_loss, global_step=global_steps)
+                writer.add_scalar("iter_g_loss/obj_g_vgg", obj_feat_loss, global_step=global_steps)
+                writer.add_scalar("iter_g_loss/obj_g_ssim", obj_ssim_loss, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_rec_l1", rec_pixel_loss, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_rec_vgg", rec_feat_loss, global_step=global_steps)
                 writer.add_scalar("iter_g_loss/g_total", g_loss, global_step=global_steps)
@@ -388,6 +396,9 @@ def main(args):
                 g_l1 += pixel_loss
                 g_vgg += feat_loss
                 g_ssim += ssim_loss
+                g_obj_l1 += obj_pixel_loss
+                g_obj_vgg += obj_feat_loss
+                g_obj_ssim += obj_ssim_loss
                 g_rec_l1 += rec_pixel_loss
                 g_rec_vgg += rec_feat_loss
                 g_all += g_loss
@@ -409,9 +420,14 @@ def main(args):
                                                                                                         ssim_loss.item(), 
                                                                                                         pixel_loss.item(), 
                                                                                                         feat_loss.item()))
-                logger.info("             rec_pixel_loss: {:.4f}, rec_feat_loss: {:.4f}".format(
+                logger.info("             obj_ssim_loss: {:.4f}, obj_pixel_loss: {:.4f}, obj_feat_loss: {:.4f}".format(
+                                                                                                        obj_ssim_loss.item(), 
+                                                                                                        obj_pixel_loss.item(), 
+                                                                                                        obj_feat_loss.item()))
+                logger.info("             rec_pixel_loss: {:.4f}, rec_feat_loss: {:.4f}, total_loss: {:.4f}".format(
                                                                                                         rec_pixel_loss.item(), 
-                                                                                                        rec_feat_loss.item()))
+                                                                                                        rec_feat_loss.item(),
+                                                                                                        g_loss.item()))
                 
                 if use_bkg_net_D:
                     logger.info("             d2_out_real: {:.4f}, d2_out_fake: {:.4f}, g2_out_fake: {:.4f} ".format(d2_loss_real.item(), d2_loss_fake.item(), g2_loss_fake.item()))
@@ -437,6 +453,9 @@ def main(args):
         writer.add_scalar("epoch_g_loss/g_l1", g_l1/steps_per_epochs, global_step=epoch+1)
         writer.add_scalar("epoch_g_loss/g_vgg", g_vgg/steps_per_epochs, global_step=epoch+1)
         writer.add_scalar("epoch_g_loss/g_ssim", g_ssim/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_g_loss/obj_g_l1", g_obj_l1/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_g_loss/obj_g_vgg", g_obj_vgg/steps_per_epochs, global_step=epoch+1)
+        writer.add_scalar("epoch_g_loss/obj_g_ssim", g_obj_ssim/steps_per_epochs, global_step=epoch+1)
         writer.add_scalar("epoch_g_loss/g_rec_l1", g_rec_l1/steps_per_epochs, global_step=epoch+1)
         writer.add_scalar("epoch_g_loss/g_rec_vgg", g_rec_vgg/steps_per_epochs, global_step=epoch+1)
         writer.add_scalar("epoch_g_loss/g_total", g_all/steps_per_epochs, global_step=epoch+1)
