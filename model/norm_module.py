@@ -133,7 +133,7 @@ class SpatialAdaptiveBatchNorm2d(nn.BatchNorm2d):
 
         b, o, _, _ = bbox_class_mask.size()
         _, _, h, w = x.size()
-        bbox_class_mask = F.interpolate(bbox_class_mask, size=(h,w), mode="bilinear" if self.last_ISLA else "nearest")
+        bbox_class_mask = F.interpolate(bbox_class_mask, size=(h,w), mode="bilinear")# if self.last_ISLA else "nearest")
         #calculate weight and bias: channel-wise beta & gamma in paper-LostGANv1
         weight, bias = self.weight_proj(vector), self.bias_proj(vector)
         weight, bias = weight.view(b, o, -1), bias.view(b, o, -1)

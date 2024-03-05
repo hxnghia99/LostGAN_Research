@@ -50,14 +50,14 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
 
 def main(args):
     '''Configuration setup'''
-    debug_phase = True
+    debug_phase = False
     #Common
     args.mode = 'train'
     args.batch_size = 16 if not debug_phase else 4
     args.total_epoch = 200 if not debug_phase else 10
     args.num_epoch_to_save = 5 if not debug_phase else 2
     args.print_freq = 150 if not debug_phase else 1
-    args.num_workers = 4 if not debug_phase else 1
+    args.num_workers = 4 if not debug_phase else 0
     args.seg_mask_thresh = 0.5
 
     #Special configurations: Developing phase
@@ -70,12 +70,12 @@ def main(args):
     if use_bkg_cls: max_num_obj = 3
 
     use_bkg_net_D = True                           #use bkg_D for background region
-    use_instance_noise_input_D = False              #add Gaussian noise to input of D
-    use_accuracy_constrain_D = False                #constraint the accuracy of whole_D: 0.8
     use_ssim_net_G = False                          #replace L1-loss by ssim-loss
     use_identity_loss = False                       #Later: use identity loss when input as fire-images
-    use_weight_map_from_stage_bbox_masks = False    #use bbox_masks to define weight_map again with threshold as 0.5
     use_enc_feat_as_bkg_cls_noise = False           #transform encoded features using FC to bkg_cls noise input
+    use_instance_noise_input_D = False              #add Gaussian noise to input of D
+    use_accuracy_constrain_D = False                #constraint the accuracy of whole_D: 0.8
+    use_weight_map_from_stage_bbox_masks = False    #use bbox_masks to define weight_map again with threshold as 0.5
     use_random_input_noise_w_enc_feat = False       #Later: use random input noise concatenating with enc_feat
 
     #Model

@@ -74,7 +74,7 @@ class MaskRegressNet(nn.Module):
         img_in = masks.float().view(b*num_o, 1, M, M)   #from conv
         #input: [bo, 1, 16, 16], [bo, 64, 64, 2]
         # output[bo,:,64,64] is interpolated from size-2 vector grid[bo,h,w]
-        sampled = F.grid_sample(img_in, grid, mode='nearest')
+        sampled = F.grid_sample(img_in, grid, mode='bilinear', align_corners=True)#mode='nearest')
         #only have values at bbox_pos + information of class
         return sampled.view(b, num_o, H, W)
         

@@ -86,8 +86,8 @@ class ResnetGenerator128(nn.Module):
         X = torch.linspace(0, 1, steps=W).view(1, W).expand(bo, W).cuda(device=bbox.device)
         Y = torch.linspace(0, 1, steps=H).view(1, H).expand(bo, H).cuda(device=bbox.device)
 
-        X = (X - xm) / ww       #([bo, W] - [bo, H])/[bo, H]
-        Y = (Y - ym) / hh       #([bo, H] - [bo, W])/[bo, W]
+        X = (X - xm) / ww       #([bo, W] - [bo, W])/[bo, W]
+        Y = (Y - ym) / hh       #([bo, H] - [bo, H])/[bo, H]
         #only values in bbox_pos in range [0, 1]
         
         #make the mask along x-axis and y-axis
@@ -159,7 +159,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o_label, h, w]  #select and keep only masks in class_label
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')   #activation + filter the area outside bbox
         alpha1 = torch.gather(self.sigmoid(self.alpha1).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)    #select and keep only alpha in class_label
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='nearest') * (1 - alpha1) + seman_bbox * alpha1    #combine
+        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha1) + seman_bbox * alpha1    #combine
         x, stage_mask = self.res7(x, latent_vector, stage_bbox)
         # x = torch.concat([x, x3], dim=1)
         x = x + x3
@@ -168,7 +168,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
         alpha2 = torch.gather(self.sigmoid(self.alpha2).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='nearest') * (1 - alpha2) + seman_bbox * alpha2
+        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha2) + seman_bbox * alpha2
         x, stage_mask = self.res8(x, latent_vector, stage_bbox)
         # x = torch.concat([x, x2], dim=1)
         x = x + x2
@@ -177,7 +177,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
         alpha3 = torch.gather(self.sigmoid(self.alpha3).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='nearest') * (1 - alpha3) + seman_bbox * alpha3
+        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha3) + seman_bbox * alpha3
         x, stage_mask = self.res9(x, latent_vector, stage_bbox)
         # x = torch.concat([x, x1], dim=1)
         x = x + x1
@@ -186,7 +186,7 @@ class ResnetGenerator128(nn.Module):
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
         seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
         alpha4 = torch.gather(self.sigmoid(self.alpha4).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='nearest') * (1 - alpha4) + seman_bbox * alpha4
+        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha4) + seman_bbox * alpha4
         x, _ = self.res10(x, latent_vector, stage_bbox)
         # x = torch.concat([x, x0], dim=1)
         x = x + x0
@@ -344,6 +344,6 @@ class PSPModule(nn.Module):
     
     def forward(self, feats):
         h, w = feats.size(2), feats.size(3)
-        priors = [F.interpolate(input=stage(feats), size=(h,w), mode='nearest') for stage in self.stages] + [feats]
+        priors = [F.interpolate(input=stage(feats), size=(h,w), mode='bilinear', align_corners=True) for stage in self.stages] + [feats]
         bottle = self.bottleneck(torch.concat(priors, 1))
         return bottle

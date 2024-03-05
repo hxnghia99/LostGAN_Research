@@ -19,8 +19,8 @@ from utils.util import draw_layout, IS_compute_np, truncted_random, normalize_mi
 def main(args):
     #Common
     args.mode = 'train'
-    args.G_path = "./outputs/model_test/019_FireGAN_add_10cls/G_80.pth"
-    args.D_path = "./outputs/model_test/019_FireGAN_add_10cls/D_80.pth"
+    args.G_path = "./outputs/model_test/041_FireGAN_baseline/G_200.pth"
+    args.D_path = "./outputs/model_test/041_FireGAN_baseline/D_200.pth"
     img_size = (args.img_size, args.img_size)
 
     #Special: Test
