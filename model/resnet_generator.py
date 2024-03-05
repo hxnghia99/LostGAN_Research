@@ -236,7 +236,7 @@ class ResBlock(nn.Module):
         x = self.activation(x)
         #if upsampling
         if self.upsample:
-            x = F.interpolate(x, scale_factor=2, mode='bilinear' if not self.predict_mask else 'nearest')
+            x = F.interpolate(x, scale_factor=2, mode='nearest')
         #spectral(conv) + Ada-bat + activation
         x = self.conv1(x)
         x = self.b2(x, latent_vector, bbox_class_mask)
@@ -248,7 +248,7 @@ class ResBlock(nn.Module):
     def shortcut(self, x):
         if self.learnable_sc:
             if self.upsample:
-                x = F.interpolate(x, scale_factor=2, mode='bilinear' if not self.predict_mask else 'nearest')
+                x = F.interpolate(x, scale_factor=2, mode='nearest')
             x = self.c_sc(x)
         return x
 
