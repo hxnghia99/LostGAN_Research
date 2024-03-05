@@ -230,7 +230,7 @@ class FireDataset(Dataset):
             weight_map = weigth_map_generator(np.array(boxes), self.image_size[0], self.image_size[1])                   
         elif self.weight_map_type == 'continuous':
             weight_map = np.ones((self.max_objects_per_image, self.image_size[0], self.image_size[1]))
-            for box in boxes:
+            for i,box in enumerate(boxes):
                 xm, ym, w, h = [round(x*self.image_size[0]) for x in box]
                 continuous_map_2d = create_continuous_map(h, w)
                 continuous_map_3d = np.repeat(np.expand_dims(continuous_map_2d, axis=0), repeats=3, axis=0)
@@ -298,10 +298,13 @@ def draw_bbox(image, bboxes):
 def weigth_map_generator(bbox, H, W):
     num_bbox = bbox.shape[0]
     xm, ym, ww, hh = bbox[:, 0:1], bbox[:,1:2], bbox[:,2:3], bbox[:,3:4]
-    X = np.repeat(np.expand_dims(np.linspace(0,1,num=W),axis=0),axis=0,repeats=num_bbox) #2x128
-    Y = np.repeat(np.expand_dims(np.linspace(0,1,num=H),axis=0),axis=0,repeats=num_bbox) #2x128
-    X = (X - xm) / ww       #([bo, W] - [bo, W])/[bo, W]
-    Y = (Y - ym) / hh       #([bo, H] - [bo, H])/[bo, H]
-    X = np.repeat(np.expand_dims((X < 0) + (X > 1), axis=1),axis=1, repeats=H)
-    Y = np.repeat(np.expand_dims((Y < 0) + (Y > 1), axis=2),axis=2, repeats=W)
-    return (X+Y).astype(np.int32)
+    x = np.repeat(np.expand_dims(np.linspace(0,1,num=W),axis=0),axis=0,repeats=num_bbox) #2x128
+    y = np.repeat(np.expand_dims(np.linspace(0,1,num=H),axis=0),axis=0,repeats=num_bbox) #2x128
+    x = (x - xm) / ww       #([bo, W] - [bo, W])/[bo, W]
+    y = (y - ym) / hh       #([bo, H] - [bo, H])/[bo, H]
+    x = np.repeat(np.expand_dims((x < 0) + (x > 1), axis=1),axis=1, repeats=H)
+    y = np.repeat(np.expand_dims((y < 0) + (y > 1), axis=2),axis=2, repeats=W)
+    weight_map = (x+y).astype(np.float32)
+    if num_bbox == 1:
+        weight_map = np.concatenate([weight_map, np.ones(weight_map.shape)], axis=0)
+    return weight_map
