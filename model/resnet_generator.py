@@ -7,13 +7,14 @@ from .mask_regression import MaskRegressNet
 
 class ResnetGenerator128(nn.Module):
     def __init__(self, ch=64, z_obj_random_dim=128, z_obj_class_dim=128, num_classes=184, output_dim=3, mask_size=16, map_size=64, input_dim=3, 
-                 enc_feat_as_bkg_noise=False, random_input_noise=False):
+                 enc_feat_as_bkg_noise=False, random_input_noise=False, test=False):
         super(ResnetGenerator128, self).__init__()
         
         self.mask_size = mask_size
         self.map_size = map_size
         self.enc_feat_as_bkg_noise = enc_feat_as_bkg_noise
         self.random_input_noise = random_input_noise
+        self.test = test
 
         #z_obj_random + z_cls -> z_obj (latent_vector)
         self.label_embedding = nn.Embedding(num_classes, embedding_dim=z_obj_class_dim)   #Embedding matrix W shaped [num_class x z_obj_class_dim]
@@ -138,11 +139,17 @@ class ResnetGenerator128(nn.Module):
 
         # preprocess bbox -> mask with information of bbox + class: value inside bbox in range [-1, 1], outside 0
         bbox_class_mask = self.mask_regress(latent_vector, bbox)      #encoding latent_vector+bbox --> [b, o_label, H(64), W(64)] / value in range [0, 1]
-        
+        if self.test:
+            bbox_mask64 = bbox_class_mask
         # if z_img is None:
         #     z_img = torch.randn((b, self.z_obj_random_dim)).cuda()  #shape [b, 128]
         
-        bbox_only_mask = self._bbox_mask_generator(bbox, self.map_size, self.map_size)   #extreme case: 0 outside, 1 inside bbox
+        bbox_only_mask4 = self._bbox_mask_generator(bbox, 4, 4)
+        bbox_only_mask8 = self._bbox_mask_generator(bbox, 8, 8)
+        bbox_only_mask16 = self._bbox_mask_generator(bbox, 16, 16)
+        bbox_only_mask32 = self._bbox_mask_generator(bbox, 32, 32)
+        bbox_only_mask64 = self._bbox_mask_generator(bbox, 64, 64)   #extreme case: 0 outside, 1 inside bbox -> b x num_o x 64x64
+        bbox_only_mask128 = self._bbox_mask_generator(bbox, 128, 128)
 
         """Iterative process in 1 ResBlock:
         1) Use bbox_class_mask (b, o_label, H, W) for ResBlock : stage_mask (b, o_cate, H, W)
@@ -150,50 +157,64 @@ class ResnetGenerator128(nn.Module):
         3) Use self.alpha (b, o_cate, 1) --> select based on label: alpha (b, o_label, 1, 1)
         4) Use bbox_class_mask (b, o_label, H, W) + seman_bbox (b, o_label, H, W) in form $ bbox_class_mask * (1 - alpha) + seman_bbox * alpha $ : stage_bbox (b, o_label, H, W) as bbox_class_mask
         """
-        #8x8x1024    
-        x, stage_mask = self.res6(x, latent_vector, bbox_class_mask)      #[b, 1024, 8, 8]  #the mask (dl, H, W) in paper - step iv) 
+        #output: 8x8x1024
+        mask1 = F.interpolate(bbox_class_mask, size=(4,4), mode="bilinear") * bbox_only_mask4
+        mask2 = F.interpolate(bbox_class_mask, size=(8,8), mode="bilinear") * bbox_only_mask8   
+        x, stage_mask = self.res6(x, latent_vector, mask1, mask2)      #[b, 1024, 8, 8]  #the mask (dl, H, W) in paper - step iv) 
         # x = torch.concat([x, x4], dim=1)
         x = x + x4
         #16x16x512
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o_label, h, w]  #select and keep only masks in class_label
-        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')   #activation + filter the area outside bbox
+        seman_bbox = torch.sigmoid(seman_bbox) * bbox_only_mask8 #F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')   #activation + filter the area outside bbox
         alpha1 = torch.gather(self.sigmoid(self.alpha1).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)    #select and keep only alpha in class_label
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha1) + seman_bbox * alpha1    #combine
-        x, stage_mask = self.res7(x, latent_vector, stage_bbox)
+        stage_bbox1 = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * bbox_only_mask8 * (1 - alpha1) + seman_bbox * alpha1    #combine
+        stage_bbox2 = F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear") * bbox_only_mask16  
+        x, stage_mask = self.res7(x, latent_vector, stage_bbox1, stage_bbox2)
+        if self.test:
+            stage_mask16 = stage_bbox2
         # x = torch.concat([x, x3], dim=1)
         x = x + x3
         #32x32x256
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
-        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
+        seman_bbox = torch.sigmoid(seman_bbox) * bbox_only_mask16 #F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
         alpha2 = torch.gather(self.sigmoid(self.alpha2).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha2) + seman_bbox * alpha2
-        x, stage_mask = self.res8(x, latent_vector, stage_bbox)
+        stage_bbox1 = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * bbox_only_mask16 * (1 - alpha2) + seman_bbox * alpha2
+        stage_bbox2 = F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear") * bbox_only_mask32  
+        x, stage_mask = self.res8(x, latent_vector, stage_bbox1, stage_bbox2)
+        if self.test:
+            stage_mask32 = stage_bbox2
         # x = torch.concat([x, x2], dim=1)
         x = x + x2
         #64x64x128
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
-        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
+        seman_bbox = torch.sigmoid(seman_bbox) * bbox_only_mask32 #F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
         alpha3 = torch.gather(self.sigmoid(self.alpha3).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha3) + seman_bbox * alpha3
-        x, stage_mask = self.res9(x, latent_vector, stage_bbox)
+        stage_bbox1 = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * bbox_only_mask32 * (1 - alpha3) + seman_bbox * alpha3
+        stage_bbox2 = F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear") * bbox_only_mask64  
+        x, stage_mask = self.res9(x, latent_vector, stage_bbox1, stage_bbox2)
+        if self.test:
+            stage_mask64 = stage_bbox2
         # x = torch.concat([x, x1], dim=1)
         x = x + x1
         #128x128x64
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
-        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
+        seman_bbox = torch.sigmoid(seman_bbox) * bbox_only_mask64 #F.interpolate(bbox_only_mask, size=(hh, ww), mode='nearest')
         alpha4 = torch.gather(self.sigmoid(self.alpha4).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
-        stage_bbox = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha4) + seman_bbox * alpha4
-        x, _ = self.res10(x, latent_vector, stage_bbox)
+        stage_bbox1 = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * stage_mask64 * (1 - alpha4) + seman_bbox * alpha4
+        stage_bbox2 = F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear") * bbox_only_mask128 
+        x, _ = self.res10(x, latent_vector, stage_bbox1, stage_bbox2)
         # x = torch.concat([x, x0], dim=1)
         x = x + x0
         x = self.res11(x)
         # to RGB
         x = self.final(x)
-        return x, F.interpolate(stage_bbox, size=(hh*2,ww*2), mode="bilinear") #inside AdaptiveNorm: stage_mask is resized double to use
+        if self.test:
+            return x, stage_bbox2, [bbox_mask64, stage_mask16, stage_mask32, stage_mask64]
+        return x, stage_bbox2 #inside AdaptiveNorm: stage_mask is resized double to use
         #stage_bbox: [b, 3 classes, 128, 128], values in range [0,1]
         
 
@@ -208,7 +229,7 @@ class ResBlock(nn.Module):
         self.conv1 = nn.utils.spectral_norm(nn.Conv2d(in_ch, self.mid_ch, kernel_size=ksize, padding=pad), eps=1e-4)
         self.conv2 = nn.utils.spectral_norm(nn.Conv2d(self.mid_ch, out_ch, kernel_size=ksize, padding=pad), eps=1e-4)
         self.b1 = SpatialAdaptiveBatchNorm2d(in_ch, num_w=num_w)
-        self.b2 = SpatialAdaptiveBatchNorm2d(self.mid_ch, num_w=num_w, last_ISLA=True)
+        self.b2 = SpatialAdaptiveBatchNorm2d(self.mid_ch, num_w=num_w, last_ISLA=False)
         self.activation = nn.ReLU()
 
         #learnable_shortcut if upsamping or in_c!=out_c
@@ -229,17 +250,17 @@ class ResBlock(nn.Module):
                                                nn.Conv2d(100, num_classes, kernel_size=1, padding=0, bias=True))
                 
     #Main branch
-    def residual(self, in_feat, latent_vector, bbox_class_mask):
+    def residual(self, in_feat, latent_vector, bbox_class_mask1, bbox_class_mask2):
         #apply Adaptive_Norm to input_feature
         x = in_feat   
-        x = self.b1(x, latent_vector, bbox_class_mask)
+        x = self.b1(x, latent_vector, bbox_class_mask1)
         x = self.activation(x)
         #if upsampling
         if self.upsample:
             x = F.interpolate(x, scale_factor=2, mode='nearest')
         #spectral(conv) + Ada-bat + activation
         x = self.conv1(x)
-        x = self.b2(x, latent_vector, bbox_class_mask)
+        x = self.b2(x, latent_vector, bbox_class_mask2)
         x = self.activation(x)
         #spectral(conv)
         x = self.conv2(x)
@@ -253,8 +274,8 @@ class ResBlock(nn.Module):
         return x
 
     #Usual case: produce feature map + mask
-    def forward(self, in_feat, latent_vector, bbox_class_mask):
-        out_feat = self.residual(in_feat, latent_vector, bbox_class_mask) + self.shortcut(in_feat)
+    def forward(self, in_feat, latent_vector, bbox_class_mask1, bbox_class_mask2):
+        out_feat = self.residual(in_feat, latent_vector, bbox_class_mask1, bbox_class_mask2) + self.shortcut(in_feat)
         if self.predict_mask:
             mask = self.conv_mask(out_feat)
         else:

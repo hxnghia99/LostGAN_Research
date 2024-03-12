@@ -82,7 +82,7 @@ def main(args):
 
 
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3, z_obj_random_dim=z_obj_random_dim, z_obj_class_dim=z_obj_cls_dim,
-                              enc_feat_as_bkg_noise=use_enc_feat_as_bkg_cls_noise, random_input_noise=use_random_input_noise_w_enc_feat).cuda()
+                              enc_feat_as_bkg_noise=use_enc_feat_as_bkg_cls_noise, random_input_noise=use_random_input_noise_w_enc_feat, test=phase_testing).cuda()
     netD = CombineDiscriminator128(num_classes=num_classes).cuda()
 
     if not os.path.isfile(args.G_path):
@@ -120,7 +120,7 @@ def main(args):
             z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=phase_testing)).float().cuda()
         else:
             z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
-        fake_images, stage_bbox_masks = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+        fake_images, stage_mask128, [bbox_mask64, stage_mask16, stage_mask32, stage_mask64] = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
         
         if not normalized:
             fake_images = fake_images*0.5+0.5
@@ -153,16 +153,39 @@ def main(args):
         non_fire_images = draw_layout(label, bbox, [256,256], class_names, non_fire_images, topleft_name='Non-fire image')
         
         #Segmentation mask
-        stage_bbox_masks = stage_bbox_masks[0].cpu().detach().numpy()   #shape [3 objs, 128, 128]
+        bbox_mask64 = bbox_mask64[0].cpu().detach().numpy()
+        stage_mask16 = stage_mask16[0].cpu().detach().numpy()
+        stage_mask32 = stage_mask32[0].cpu().detach().numpy()
+        stage_mask64 = stage_mask64[0].cpu().detach().numpy()
+        stage_mask128 = stage_mask128[0].cpu().detach().numpy()   #shape [3 objs, 128, 128]
         #4) soft-mask
-        soft_mask = normalize_minmax(np.clip(np.sum(stage_bbox_masks[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
-        soft_mask = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask, topleft_name='Soft seg-mask')
-        #5) hard-mask
-        hard_mask = np.any(stage_bbox_masks[0:2]>args.seg_mask_thresh, axis=0).astype(np.uint8)
-        hard_mask = normalize_minmax(hard_mask, [0, 255], input_range=[0,1])
-        hard_mask = draw_layout(label, bbox, [256,256], class_names, input_img=hard_mask, topleft_name='Hard seg-mask')
+        embed_mask64 = normalize_minmax(np.clip(np.sum(bbox_mask64[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+        test_embed_mask64 = draw_layout(label, bbox, [64,64], class_names, input_img=embed_mask64, topleft_name='Test Embed mask 64x64')
+        cv2.imshow("Test embed 64x64", cv2.resize(cv2.cvtColor(test_embed_mask64.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+        embed_mask64 = draw_layout(label, bbox, [256,256], class_names, input_img=embed_mask64, topleft_name='Embed mask 64x64')
+        
+        soft_mask16 = normalize_minmax(np.clip(np.sum(stage_mask16[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+        test_soft_mask16 = draw_layout(label, bbox, [16,16], class_names, input_img=soft_mask16, topleft_name='Test Soft 16x16')
+        cv2.imshow("Test soft 16x16", cv2.resize(cv2.cvtColor(test_soft_mask16.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+        soft_mask16 = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask16, topleft_name='Soft mask 16x16')
 
-        output_images = combine_images([fire_images, non_fire_images, fake_images, soft_mask, hard_mask], [256,256])
+        soft_mask32 = normalize_minmax(np.clip(np.sum(stage_mask32[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+        soft_mask32 = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask32, topleft_name='Soft mask 32x32')
+
+        soft_mask64 = normalize_minmax(np.clip(np.sum(stage_mask64[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+        soft_mask64 = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask64, topleft_name='Soft mask 64x64')
+
+        soft_mask128 = normalize_minmax(np.clip(np.sum(stage_mask128[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+        soft_mask128 = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask128, topleft_name='Soft mask 128x128')
+        
+        # #5) hard-mask
+        # hard_mask = np.any(stage_mask128[0:2]>args.seg_mask_thresh, axis=0).astype(np.uint8)
+        # hard_mask = normalize_minmax(hard_mask, [0, 255], input_range=[0,1])
+        # hard_mask = draw_layout(label, bbox, [256,256], class_names, input_img=hard_mask, topleft_name='Hard seg-mask')
+
+        # output_images = combine_images([fire_images, non_fire_images, fake_images, soft_mask128, hard_mask], [256,256])
+        
+        output_images = combine_images([fire_images, non_fire_images, fake_images, embed_mask64, soft_mask16, soft_mask32, soft_mask64, soft_mask128], [256,256])
 
         cv2.imshow("Test generating Fire + Mask", cv2.cvtColor(output_images.astype(np.uint8), cv2.COLOR_RGB2BGR))
         if cv2.waitKey() == 'q':

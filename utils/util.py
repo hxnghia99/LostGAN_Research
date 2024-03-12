@@ -79,7 +79,7 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
         temp_img[25:25+size[0], 25:25+size[1],:] = input_img
         temp_img = np.repeat(temp_img, repeats=3, axis=2) if num_c==1 else temp_img
      
-    bbox = (bbox[0]*size[0]).numpy().astype(np.int32)
+    bbox = (bbox[0]*size[0]).numpy()
     label = label[0]
     num_classes = len(class_names)
 
@@ -102,6 +102,10 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
                 label_color = (0, 255, 0)
         
         x,y,width,height = bbox[i]
+        xmin, ymin = np.ceil(x), np.ceil(y)
+        xmax, ymax = np.floor(x+width), np.floor(y+height)
+        x, y, width, height = int(xmin), int(ymin), int(xmax - xmin +1), int(ymax - ymin +1)
+
         x,y = x+25, y+25
         class_name = class_names[label[i]]
         cv2.rectangle(temp_img, (x, y), (x + width, y + height), label_color, 1)  # (0, 255, 0) is the color (green), 2 is the thickness
@@ -109,9 +113,9 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
 
     if D_class_score is not None:
         if D_class_score>=0:
-            D_class_text = "Real: {}%".format(D_class_score*100)
+            D_class_text = "Real: {:.2f}%".format(D_class_score*100)
         else:
-            D_class_text = "Fake: {}%".format(-D_class_score*100)
+            D_class_text = "Fake: {:.2f}%".format(-D_class_score*100)
         cv2.putText(temp_img, D_class_text, (25,size[1]+50 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
     
     cv2.rectangle(temp_img, (25, 25), (25 + size[1], 25 + size[0]), (255,255,255), 1)
@@ -151,14 +155,14 @@ def normalize_minmax(img, targe_range, input_range=None):
 def combine_images(list_images, img_input_size):
     x1wid = img_input_size[1]+50
     x1hei = img_input_size[0]+50
-    x6wid = x1wid * 3
+    x6wid = x1wid * (3 if len(img_input_size)==5 else 5)
     x6hei = x1hei * 2
     
     temp_img = np.zeros([x6hei, x6wid, 3], dtype=np.uint8)
     for i, img in enumerate(list_images):
-        row = i // 3
-        col = i % 3
-        if row==1:
+        row = (i // 3) if len(img_input_size)==5 else 1 if i>=3 else 0
+        col = i % 3 if len(img_input_size)==5 else i-3 if i>=3 else i
+        if row==1 and len(img_input_size)==5:
             col+=1
         temp_img[x1hei*row:x1hei*(row+1), x1wid*col:x1wid*(col+1), :] = img
     
