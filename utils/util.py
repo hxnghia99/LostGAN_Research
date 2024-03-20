@@ -1,6 +1,6 @@
 import torch
 from torchvision import models
-from torchvision.models.vgg import VGG19_Weights
+# from torchvision.models.vgg import VGG19_Weights
 import torch.nn as nn
 import cv2
 import colorsys
@@ -12,7 +12,7 @@ from torchmetrics.image.inception import InceptionScore
 class Vgg19(torch.nn.Module):
     def __init__(self, requires_grad=False):
         super(Vgg19, self).__init__()
-        vgg_pretrained_features = models.vgg19(weights=VGG19_Weights.DEFAULT).features
+        vgg_pretrained_features = models.vgg19(pretrained=True).features
         self.slice1 = torch.nn.Sequential()
         self.slice2 = torch.nn.Sequential()
         self.slice3 = torch.nn.Sequential()
@@ -79,7 +79,7 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
         temp_img[25:25+size[0], 25:25+size[1],:] = input_img
         temp_img = np.repeat(temp_img, repeats=3, axis=2) if num_c==1 else temp_img
      
-    bbox = (bbox[0]*size[0]).numpy()
+    bbox = (bbox[0]*(size[0]-1)).numpy()
     label = label[0]
     num_classes = len(class_names)
 

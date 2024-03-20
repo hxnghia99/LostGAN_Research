@@ -167,7 +167,7 @@ class ResnetGenerator128(nn.Module):
         #16x16x512
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o_label, h, w]  #select and keep only masks in class_label
-        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask64, size=(hh, ww), mode='nearest')   #activation + filter the area outside bbox
+        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask64, size=(hh, ww), mode='nearest-exact')   #activation + filter the area outside bbox
         alpha1 = torch.gather(self.sigmoid(self.alpha1).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)    #select and keep only alpha in class_label
         stage_bbox1 = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha1) + seman_bbox * alpha1    #combine
         stage_bbox2 = stage_bbox1#F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear") * bbox_only_mask16  
@@ -179,7 +179,7 @@ class ResnetGenerator128(nn.Module):
         #32x32x256
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
-        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask64, size=(hh, ww), mode='nearest')
+        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask64, size=(hh, ww), mode='nearest-exact')
         alpha2 = torch.gather(self.sigmoid(self.alpha2).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox1 = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha2) + seman_bbox * alpha2
         stage_bbox2 = stage_bbox1#F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear") * bbox_only_mask32  
@@ -191,7 +191,7 @@ class ResnetGenerator128(nn.Module):
         #64x64x128
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
-        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask64, size=(hh, ww), mode='nearest')
+        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask64, size=(hh, ww), mode='nearest-exact')
         alpha3 = torch.gather(self.sigmoid(self.alpha3).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox1 = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha3) + seman_bbox * alpha3
         stage_bbox2 = stage_bbox1#F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear") * bbox_only_mask64  
@@ -203,7 +203,7 @@ class ResnetGenerator128(nn.Module):
         #128x128x64
         hh, ww = x.size(2), x.size(3)
         seman_bbox = self._batched_index_select(stage_mask, dim=1, index=class_label.view(b, o, 1, 1))  # [b, o, h, w]
-        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask64, size=(hh, ww), mode='nearest')
+        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_only_mask64, size=(hh, ww), mode='nearest-exact')
         alpha4 = torch.gather(self.sigmoid(self.alpha4).expand(b, -1, -1), dim=1, index=class_label.view(b, o, 1)).unsqueeze(-1)
         stage_bbox1 = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha4) + seman_bbox * alpha4
         stage_bbox2 = stage_bbox1#F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear") * bbox_only_mask128 
@@ -259,7 +259,7 @@ class ResBlock(nn.Module):
         x = self.activation(x)
         #if upsampling
         if self.upsample:
-            x = F.interpolate(x, scale_factor=2, mode='nearest')
+            x = F.interpolate(x, scale_factor=2, mode='nearest-exact')
         #spectral(conv) + Ada-bat + activation
         x = self.conv1(x)
         x = self.b2(x, latent_vector, bbox_class_mask2)
@@ -271,7 +271,7 @@ class ResBlock(nn.Module):
     def shortcut(self, x):
         if self.learnable_sc:
             if self.upsample:
-                x = F.interpolate(x, scale_factor=2, mode='nearest')
+                x = F.interpolate(x, scale_factor=2, mode='nearest-exact')
             x = self.c_sc(x)
         return x
 
