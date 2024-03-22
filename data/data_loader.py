@@ -242,17 +242,21 @@ class FireDataset(Dataset):
             raise NotImplemented("Not implement the weight map type as ['extreme', 'continuous'] ...")
 
         # If less then 8 objects, add 0 class_id and unused bbox as background
-        for idx in range(len(objects), int(self.max_objects_per_image/2)):
+        for idx in range(len(objects), int(self.max_objects_per_image/2) if self.max_objects_per_image==4 else self.max_objects_per_image):
             # if idx+1 == self.max_objects_per_image and self.max_objects_per_image==4:   #if max_obj==3: add bkg_obj covering whole_image
             #     classes.append(self.vocal['background'])
             #     boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
             # else:    
             #     classes.append(self.vocal['_None_'])
             #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-            classes.append(self.vocal['_None_'])
-            boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-            classes.append(self.vocal['_None_'])
-            boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            if self.max_objects_per_image==4:
+                classes.append(self.vocal['_None_'])
+                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+                classes.append(self.vocal['_None_'])
+                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            else:
+                classes.append(self.vocal['_None_'])
+                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
 
         classes = torch.LongTensor(classes)
         boxes = np.vstack(boxes)
