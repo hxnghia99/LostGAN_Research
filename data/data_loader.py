@@ -218,14 +218,16 @@ class FireDataset(Dataset):
         classes, boxes, boxes_weight_map = [], [], []
         for object_data in objects:
             classes.append(object_data['class_id'])
-            classes.append(self.vocal['background'])
+            if self.max_objects_per_image == 4:
+                classes.append(self.vocal['background'])
             xm, ym, w, h = object_data['bbox']
             xm = xm / WF
             ym = ym / HF
             w = (w) / WF
             h = (h) / HF
             boxes.append(np.array([xm, ym, w, h]))
-            boxes.append(np.array([xm, ym, w, h]))
+            if self.max_objects_per_image == 4:
+                boxes.append(np.array([xm, ym, w, h]))
             boxes_weight_map.append(np.array([xm, ym, w, h]))
 
         #make weight for background / fire_region: 1 outside, 0 inside
