@@ -79,7 +79,7 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
         temp_img[25:25+size[0], 25:25+size[1],:] = input_img
         temp_img = np.repeat(temp_img, repeats=3, axis=2) if num_c==1 else temp_img
      
-    bbox = (bbox[0]*(size[0]-1)).numpy()
+    bbox = (bbox[0]*(size[0])).numpy()
     label = label[0]
     num_classes = len(class_names)
 
@@ -101,8 +101,8 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
             else:
                 label_color = (0, 255, 0)
         
-        x,y,width,height = bbox[i]
-        xmin, ymin = np.ceil(x), np.ceil(y)
+        x, y, width, height = bbox[i]
+        xmin, ymin = np.floor(x), np.floor(y)
         xmax, ymax = np.floor(x+width), np.floor(y+height)
         x, y, width, height = int(xmin), int(ymin), int(xmax - xmin +1), int(ymax - ymin +1)
 

@@ -215,19 +215,22 @@ class FireDataset(Dataset):
         # non_fire_box.show()
 
         #Assign values to boxes, label for training, testing
-        classes, boxes = [], []
+        classes, boxes, boxes_weight_map = [], [], []
         for object_data in objects:
             classes.append(object_data['class_id'])
+            classes.append(self.vocal['background'])
             xm, ym, w, h = object_data['bbox']
             xm = xm / WF
             ym = ym / HF
             w = (w) / WF
             h = (h) / HF
             boxes.append(np.array([xm, ym, w, h]))
+            boxes.append(np.array([xm, ym, w, h]))
+            boxes_weight_map.append(np.array([xm, ym, w, h]))
 
         #make weight for background / fire_region: 1 outside, 0 inside
         if self.weight_map_type == 'extreme':
-            weight_map = weigth_map_generator(np.array(boxes), self.image_size[0], self.image_size[1])                   
+            weight_map = weigth_map_generator(np.array(boxes_weight_map), self.image_size[0], self.image_size[1])                   
         elif self.weight_map_type == 'continuous':
             weight_map = np.ones((self.max_objects_per_image, self.image_size[0], self.image_size[1]))
             for i,box in enumerate(boxes):
@@ -239,15 +242,17 @@ class FireDataset(Dataset):
             raise NotImplemented("Not implement the weight map type as ['extreme', 'continuous'] ...")
 
         # If less then 8 objects, add 0 class_id and unused bbox as background
-        for idx in range(len(objects), self.max_objects_per_image):
-            if idx+1 == self.max_objects_per_image and self.max_objects_per_image==3:   #if max_obj==3: add bkg_obj covering whole_image
-                classes.append(self.vocal['background'])
-                boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
-            else:    
-                classes.append(self.vocal['_None_'])
-                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-            # classes.append(self.vocal['_None_'])
-            # boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+        for idx in range(len(objects), int(self.max_objects_per_image/2)):
+            # if idx+1 == self.max_objects_per_image and self.max_objects_per_image==4:   #if max_obj==3: add bkg_obj covering whole_image
+            #     classes.append(self.vocal['background'])
+            #     boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
+            # else:    
+            #     classes.append(self.vocal['_None_'])
+            #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            classes.append(self.vocal['_None_'])
+            boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            classes.append(self.vocal['_None_'])
+            boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
 
         classes = torch.LongTensor(classes)
         boxes = np.vstack(boxes)
@@ -298,8 +303,8 @@ def draw_bbox(image, bboxes):
 def weigth_map_generator(bbox, H, W):
     num_bbox = bbox.shape[0]
     xm, ym, ww, hh = bbox[:, 0:1], bbox[:,1:2], bbox[:,2:3], bbox[:,3:4]
-    x = np.repeat(np.expand_dims(np.linspace(0,1,num=W),axis=0),axis=0,repeats=num_bbox) #2x128
-    y = np.repeat(np.expand_dims(np.linspace(0,1,num=H),axis=0),axis=0,repeats=num_bbox) #2x128
+    x = np.repeat(np.expand_dims(np.linspace(0,1,num=W+1)[0:W],axis=0),axis=0,repeats=num_bbox) #2x128
+    y = np.repeat(np.expand_dims(np.linspace(0,1,num=H+1)[0:H],axis=0),axis=0,repeats=num_bbox) #2x128
     x = (x - xm) / ww       #([bo, W] - [bo, W])/[bo, W]
     y = (y - ym) / hh       #([bo, H] - [bo, H])/[bo, H]
     x = np.repeat(np.expand_dims((x < 0) + (x > 1), axis=1),axis=1, repeats=H)

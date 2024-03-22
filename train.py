@@ -66,13 +66,15 @@ def main(args):
     
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
     get_first_fire_smoke = True if max_num_obj==2 else False    
+    
     use_bkg_cls = False             #bboxes do not cover whole image --> True: add 1 bkg_cls + bkg_noise_embedding_input as random
-    if use_bkg_cls: max_num_obj = 3
+    use_enc_feat_as_bkg_cls_noise = False           #transform encoded features using FC to bkg_cls noise input
+    if use_bkg_cls: max_num_obj *= 2
 
-    use_bkg_net_D = True                           #use bkg_D for background region
+    use_bkg_net_D = True                            #use bkg_D for background region
+    use_D1_img_loss = True
     use_ssim_net_G = False                          #replace L1-loss by ssim-loss
     use_identity_loss = False                       #Later: use identity loss when input as fire-images
-    use_enc_feat_as_bkg_cls_noise = False           #transform encoded features using FC to bkg_cls noise input
     use_instance_noise_input_D = False              #add Gaussian noise to input of D
     use_accuracy_constrain_D = False                #constraint the accuracy of whole_D: 0.8
     use_weight_map_from_stage_bbox_masks = False    #use bbox_masks to define weight_map again with threshold as 0.5
@@ -268,14 +270,14 @@ def main(args):
                     d_out_real, d_out_robj = netD(add_normal_noise_input_D(fire_images), bbox.cuda(), label)
                 else:
                     d_out_real, d_out_robj = netD(fire_images, bbox.cuda(), label)
-                d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean()
+                d_loss_real = torch.nn.ReLU()(1.0 - d_out_real).mean() if use_D1_img_loss else torch.tensor([0]).cuda()
                 d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
                 
                 if use_instance_noise_input_D:
                     d_out_fake, d_out_fobj = netD(add_normal_noise_input_D(fake_images.detach()), bbox.cuda(), label)
                 else:
                     d_out_fake, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
-                d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean()
+                d_loss_fake = torch.nn.ReLU()(1.0 + d_out_fake).mean() if use_D1_img_loss else torch.tensor([0]).cuda()
                 d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
 
                 d_loss = lamb_obj * (d_loss_robj + d_loss_fobj) + (lamb_img/2) * (d_loss_real + d_loss_fake)
@@ -336,7 +338,7 @@ def main(args):
                     g_out_fake, g_out_fobj = netD(add_normal_noise_input_D(fake_images), bbox.cuda(), label)
                 else:
                     g_out_fake, g_out_fobj = netD(fake_images, bbox.cuda(), label)
-                g_loss_fake =  - g_out_fake.mean()
+                g_loss_fake =  - g_out_fake.mean() if use_D1_img_loss else torch.tensor([0]).cuda()
                 g_loss_fobj = - g_out_fobj.mean()
                 
                 #Adversarial loss from D2
@@ -354,10 +356,12 @@ def main(args):
                 else:
                     pixel_loss = l1_loss(fake_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks), non_fire_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks)).mean()
                     obj_pixel_loss = l1_loss(fake_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks), fire_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks)).mean()
+                    bkg_pixel_loss = l1_loss(fake_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks), non_fire_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks)).mean()
 
                 #reconstruction loss
                 feat_loss = vgg_loss(fake_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks), non_fire_images*(weight_map if not use_weight_map_from_stage_bbox_masks else weight_map_from_stage_bbox_masks)).mean()
                 obj_feat_loss = vgg_loss(fake_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks), fire_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks)).mean()
+                bkg_feat_loss = vgg_loss(fake_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks), non_fire_images*(1-weight_map if not use_weight_map_from_stage_bbox_masks else 1-weight_map_from_stage_bbox_masks)).mean()
 
                 #Identity loss
                 if use_identity_loss:
