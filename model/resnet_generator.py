@@ -7,7 +7,7 @@ from .mask_regression import MaskRegressNet
 
 class ResnetGenerator128(nn.Module):
     def __init__(self, ch=64, z_obj_random_dim=128, z_obj_class_dim=128, num_classes=184, output_dim=3, mask_size=16, map_size=64, input_dim=3, 
-                 enc_feat_as_bkg_noise=False, random_input_noise=False, test=False):
+                 enc_feat_as_bkg_noise=False, random_input_noise=False, test=False, use_res11=False):
         super(ResnetGenerator128, self).__init__()
         
         self.mask_size = mask_size
@@ -15,6 +15,7 @@ class ResnetGenerator128(nn.Module):
         self.enc_feat_as_bkg_noise = enc_feat_as_bkg_noise
         self.random_input_noise = random_input_noise
         self.test = test
+        self.use_res11 = use_res11
 
         #z_obj_random + z_cls -> z_obj (latent_vector)
         self.label_embedding = nn.Embedding(num_classes, embedding_dim=z_obj_class_dim)   #Embedding matrix W shaped [num_class x z_obj_class_dim]
@@ -43,7 +44,8 @@ class ResnetGenerator128(nn.Module):
         self.res8 = ResBlock(ch*8, ch*4, upsample=True, num_w=z_obj_dim, num_classes=num_classes)  #channel: 512->256
         self.res9 = ResBlock(ch*4, ch*2, upsample=True, num_w=z_obj_dim, num_classes=num_classes, psp_module=True)  #channel: 256->128
         self.res10 = ResBlock(ch*2, ch*1, upsample=True, num_w=z_obj_dim, num_classes=num_classes, predict_mask=False)  #channel: 128->64
-        # self.res11 = ResBlock_en(ch*1, ch*1)
+        if use_res11:
+            self.res11 = ResBlock_en(ch*1, ch*1)
 
         # self.norm11 = SpatialAdaptiveBatchNorm2d(ch*1, num_w=z_obj_dim)
         self.final = nn.Sequential(nn.BatchNorm2d(ch),
@@ -141,8 +143,9 @@ class ResnetGenerator128(nn.Module):
 
         # preprocess bbox -> mask with information of bbox + class: value inside bbox in range [-1, 1], outside 0
         bbox_class_mask = self.mask_regress(latent_vector, bbox)      #encoding latent_vector+bbox --> [b, o_label, H(64), W(64)] / value in range [0, 1]
-        if self.test:
-            bbox_mask64 = bbox_class_mask
+        
+        # if self.test:
+        bbox_mask64 = bbox_class_mask
         # if z_img is None:
         #     z_img = torch.randn((b, self.z_obj_random_dim)).cuda()  #shape [b, 128]
         
@@ -173,8 +176,8 @@ class ResnetGenerator128(nn.Module):
         stage_bbox1 = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha1) + seman_bbox * alpha1    #combine
         stage_bbox2 = stage_bbox1 #F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear")  
         x, stage_mask = self.res7(x, latent_vector, stage_bbox1, stage_bbox2)
-        if self.test:
-            stage_mask16 = F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear")
+        # if self.test:
+        stage_mask16 = F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear")
         # x = torch.concat([x, x3], dim=1)
         x = x + x3
         #32x32x256
@@ -185,8 +188,8 @@ class ResnetGenerator128(nn.Module):
         stage_bbox1 = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha2) + seman_bbox * alpha2
         stage_bbox2 = stage_bbox1 #F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear")  
         x, stage_mask = self.res8(x, latent_vector, stage_bbox1, stage_bbox2)
-        if self.test:
-            stage_mask32 = F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear")
+        # if self.test:
+        stage_mask32 = F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear")
         # x = torch.concat([x, x2], dim=1)
         x = x + x2
         #64x64x128
@@ -197,8 +200,8 @@ class ResnetGenerator128(nn.Module):
         stage_bbox1 = F.interpolate(bbox_class_mask, size=(hh, ww), mode='bilinear') * (1 - alpha3) + seman_bbox * alpha3
         stage_bbox2 = stage_bbox1 #F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear")  
         x, stage_mask = self.res9(x, latent_vector, stage_bbox1, stage_bbox2)
-        if self.test:
-            stage_mask64 = F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear")
+        # if self.test:
+        stage_mask64 = F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear")
         # x = torch.concat([x, x1], dim=1)
         x = x + x1
         #128x128x64
@@ -211,13 +214,14 @@ class ResnetGenerator128(nn.Module):
         x, _ = self.res10(x, latent_vector, stage_bbox1, stage_bbox2)
         # x = torch.concat([x, x0], dim=1)
         x = x + x0
-        # x = self.res11(x)
+        if self.use_res11:
+            x = self.res11(x)
         # to RGB
         # x = self.norm11(x, latent_vector, stage_bbox1)
         x = self.final(x)
         if self.test:
             return x, F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear"), [bbox_mask64, stage_mask16, stage_mask32, stage_mask64]
-        return x, F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear") #inside AdaptiveNorm: stage_mask is resized double to use
+        return x, F.interpolate(stage_bbox1, size=(hh*2,ww*2), mode="bilinear"), [bbox_mask64, stage_mask16, stage_mask32, stage_mask64] #inside AdaptiveNorm: stage_mask is resized double to use
         #stage_bbox: [b, 3 classes, 128, 128], values in range [0,1]
         
 

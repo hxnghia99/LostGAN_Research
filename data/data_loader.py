@@ -217,9 +217,7 @@ class FireDataset(Dataset):
         #Assign values to boxes, label for training, testing
         classes, boxes, boxes_weight_map = [], [], []
         for object_data in objects:
-            classes.append(object_data['class_id'])
-            if self.max_objects_per_image == 4:
-                classes.append(self.vocal['background'])
+            classes.append(object_data['class_id'])   
             xm, ym, w, h = object_data['bbox']
             xm = xm / WF
             ym = ym / HF
@@ -227,6 +225,7 @@ class FireDataset(Dataset):
             h = (h) / HF
             boxes.append(np.array([xm, ym, w, h]))
             if self.max_objects_per_image == 4:
+                classes.append(self.vocal['background'])
                 boxes.append(np.array([xm, ym, w, h]))
             boxes_weight_map.append(np.array([xm, ym, w, h]))
 
