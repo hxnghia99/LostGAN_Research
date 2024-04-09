@@ -156,12 +156,12 @@ def combine_images(list_images, img_input_size):
     x1wid = img_input_size[1]+50
     x1hei = img_input_size[0]+50
     x6wid = x1wid * (3 if len(img_input_size)==5 else 5)
-    x6hei = x1hei * 2
+    x6hei = x1hei * (int(len(list_images)/5)+1)
     
     temp_img = np.zeros([x6hei, x6wid, 3], dtype=np.uint8)
     for i, img in enumerate(list_images):
-        row = (i // 3) if len(img_input_size)==5 else 1 if i>=3 else 0
-        col = i % 3 if len(img_input_size)==5 else i-3 if i>=3 else i
+        row = (i // 3) if len(img_input_size)==5 else 1 if (i>=3 and i<8) else 2 if (i>=8) else 0
+        col = i % 3 if len(img_input_size)==5 else i-3 if (i>=3 and i<8) else i-8 if (i>=8) else i
         if row==1 and len(img_input_size)==5:
             col+=1
         temp_img[x1hei*row:x1hei*(row+1), x1wid*col:x1wid*(col+1), :] = img

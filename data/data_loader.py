@@ -229,6 +229,7 @@ class FireDataset(Dataset):
                 boxes.append(np.array([xm, ym, w, h]))
             boxes_weight_map.append(np.array([xm, ym, w, h]))
 
+
         #make weight for background / fire_region: 1 outside, 0 inside
         if self.weight_map_type == 'extreme':
             weight_map = weigth_map_generator(np.array(boxes_weight_map), self.image_size[0], self.image_size[1])                   
@@ -243,21 +244,42 @@ class FireDataset(Dataset):
             raise NotImplemented("Not implement the weight map type as ['extreme', 'continuous'] ...")
 
         # If less then 8 objects, add 0 class_id and unused bbox as background
-        for idx in range(len(objects), int(self.max_objects_per_image/2) if self.max_objects_per_image==4 else self.max_objects_per_image):
-            # if idx+1 == self.max_objects_per_image and self.max_objects_per_image==4:   #if max_obj==3: add bkg_obj covering whole_image
-            #     classes.append(self.vocal['background'])
-            #     boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
-            # else:    
+        if self.max_objects_per_image == 2 or self.max_objects_per_image == 4:
+            max_objs_per_img = 2
+        elif self.max_objects_per_image == 3:
+            max_objs_per_img = 3
+            
+        for idx in range(len(objects), max_objs_per_img):
+            if self.max_objects_per_image == 2:                         #normal: add __None__
+                classes.append(self.vocal['_None_'])
+                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            elif self.max_objects_per_image == 3:                       #if 3: add __bkg__ final, __None__ before
+                if idx+1 == max_objs_per_img:
+                    classes.append(self.vocal['background'])
+                    boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
+                else:
+                    classes.append(self.vocal['_None_'])
+                    boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            elif self.max_objects_per_image == 4:                       #if 4: add __None__ x2
+                classes.append(self.vocal['_None_'])
+                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+                classes.append(self.vocal['_None_'])
+                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            
+            # # if idx+1 == self.max_objects_per_image and self.max_objects_per_image==4:   #if max_obj==3: add bkg_obj covering whole_image
+            # #     classes.append(self.vocal['background'])
+            # #     boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
+            # # else:    
+            # #     classes.append(self.vocal['_None_'])
+            # #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            # if self.max_objects_per_image==4:
             #     classes.append(self.vocal['_None_'])
             #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-            if self.max_objects_per_image==4:
-                classes.append(self.vocal['_None_'])
-                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-                classes.append(self.vocal['_None_'])
-                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-            else:
-                classes.append(self.vocal['_None_'])
-                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            #     classes.append(self.vocal['_None_'])
+            #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            # else:
+            #     classes.append(self.vocal['_None_'])
+            #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
 
         classes = torch.LongTensor(classes)
         boxes = np.vstack(boxes)
