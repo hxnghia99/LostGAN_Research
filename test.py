@@ -19,24 +19,29 @@ from utils.util import draw_layout, IS_compute_np, truncted_random, normalize_mi
 def main(args):
     #Common
     args.mode = 'train'
-    args.G_path = "./outputs/model_test/057_FireGAN_res11/G_200.pth"
-    args.D_path = "./outputs/model_test/057_FireGAN_res11/D_200.pth"
+    args.G_path = "./outputs/model_test/062_FireGAN_bkgcls_whole/G_200.pth"
+    args.D_path = "./outputs/model_test/062_FireGAN_bkgcls_whole/D_200.pth"
     img_size = (args.img_size, args.img_size)
 
     #Special: Test
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
     get_first_fire_smoke = True if max_num_obj==2 else False    
-    use_bkg_cls = False             #bboxes do not cover whole image --> True: add 1 bkg_cls + bkg_noise_embedding_input as random
-    if use_bkg_cls: max_num_obj *= 2
-    use_enc_feat_as_bkg_cls_noise = False           #transform encoded features using FC to bkg_cls noise input
-    use_random_input_noise_w_enc_feat = False       #Later: use random input noise concatenating with enc_feat
     
-    use_res11 = True                               #use residual block 11
+    use_bkg_cls = True             #bboxes do not cover whole image --> True: add 1 bkg_cls + bkg_noise_embedding_input as random
+    bkg_bbox_cover_whole = True
+    use_enc_feat_as_bkg_cls_noise = False           #transform encoded features using FC to bkg_cls noise input
+
+    if use_bkg_cls and not bkg_bbox_cover_whole:
+        max_num_obj *= 2
+    elif use_bkg_cls and bkg_bbox_cover_whole:
+        max_num_obj += 1
+    
+    use_res11 = False                               #use residual block 11
     z_obj_random_dim = 128
     z_obj_cls_dim = 128
-    normalized = True
     z_obj_random_thres=2.0
-    args.seg_mask_thresh = 0.5
+    args.seg_mask_thresh = 0.20
+    use_random_input_noise_w_enc_feat = False       #Later: use random input noise concatenating with enc_feat
 
     phase_testing = True
 
@@ -70,7 +75,6 @@ def main(args):
                                 image_size=img_size,
                                 max_objects_per_image=max_num_obj,
                                 get_first_fire_smoke=get_first_fire_smoke,
-                                normalize_images=normalized,
                                 test=phase_testing)
 
         with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
@@ -91,7 +95,7 @@ def main(args):
     
     state_dict = torch.load(args.G_path)
     model_dict = netG.state_dict()
-    assert len(state_dict) == len(model_dict), "The weight file are different from the G model"
+    assert len(state_dict) == len(model_dict), f"The weight file are different from the G model: {len(state_dict)} != {len(model_dict)}"
     pretrained_dict = {k: v for k, v in state_dict.items() if k in model_dict}
 
     # model_dict['final.2.weight_orig'] = torch.randn(model_dict['final.2.weight_orig'].shape) 
@@ -118,34 +122,30 @@ def main(args):
     if save_results:
         id_img = 0
     for idx, data in enumerate(dataloader):
-        [fire_images, non_fire_images, _], label, bbox, weight_map = data
+        [fire_images, non_fire_images], label, bbox, [weight_map_orig, weight_map_2_orig] = data
         
         # label[0][0] = 1
         # label[0][1] = 2
         # bbox[0,0] = torch.tensor([0.0, 0.0, 1.0, 0.5])
         # bbox[0,1] = torch.tensor([0.0, 0.5, 1.0, 0.5])
 
-        input_img = (1 - torch.all(weight_map, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.FloatTensor))*2-1
+        # input_img = (1 - torch.all(weight_map, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.FloatTensor))*2-1
         
-        temp_img = ((input_img+1)/2).cpu().numpy()[0].transpose(1, 2, 0)
-        cv2.imshow("test bw image", cv2.resize(temp_img.astype(np.uint8)*255, (256,256)))
+        # temp_img = ((input_img+1)/2).cpu().numpy()[0].transpose(1, 2, 0)
+        # cv2.imshow("test bw image", cv2.resize(temp_img.astype(np.uint8)*255, (256,256)))
         
 
-        
-        label, bbox, weight_map = label.long().cuda().unsqueeze(-1), bbox.float(), weight_map.float().cuda()      #keep bbox in cpu --> make input of netG,netD in gpu
-        fire_images = fire_images.cuda()
-        non_fire_images = non_fire_images.cuda()
+        fire_images, non_fire_images = fire_images.cuda(), non_fire_images.cuda()
+        label, bbox = label.long().cuda().unsqueeze(-1), bbox.float(),    #keep bbox in cpu --> make input of netG,netD in gpu
+        weight_map_orig, weight_map_2_orig = weight_map_orig.float().cuda(), weight_map_2_orig.float().cuda()  
 
-        if normalized:
-            z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=phase_testing)).float().cuda()
-        else:
-            z_obj = torch.rand(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()
-        # if use_bkg_cls:
-        #     z_obj[:,0,:] = 0.0  #make bkg_cls_nosie = 0.0 -> no effect of input noise
-        #     z_obj[:,2,:] = 0.0
+        # weight_map = torch.all(weight_map_orig, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
+        # weight_map_2 = torch.all(weight_map_2_orig, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
 
-        
-        fake_images, stage_mask128, [bbox_mask64, stage_mask16, stage_mask32, stage_mask64] = netG(z_img=input_img, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
+        z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=phase_testing)).float().cuda()
+ 
+        #Forward()
+        fake_images, stage_mask128, [bbox_mask64, stage_mask16, stage_mask32, stage_mask64] = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
 
         # if use_bkg_cls:
         #     z_obj[:,0,:] = 0.0  #make bkg_cls_nosie = 0.0 -> no effect of input noise
@@ -153,40 +153,37 @@ def main(args):
 
         # z_obj = torch.zeros_like(z_obj)
         # fake_images, stage_mask128, [bbox_mask64, stage_mask16, stage_mask32, stage_mask64] = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128
-        
 
-        if not normalized:
-            fake_images = fake_images*0.5+0.5
-        g_out_fake, _ = netD(fake_images, bbox.cuda(), label)
-        g_out_real, _ = netD(fire_images, bbox.cuda(), label)
+        g_out_fake, _ = netD(fake_images, None, None)
+        g_out_real, _ = netD(fire_images, None, None)
 
         # fake_fire_crops = fake_images * weight_map
         
         #1) fake-fire
-        if not normalized:
-            fake_images = (fake_images-0.5)*2
-        
-        fake_images = (fake_images*0.5+0.5) * torch.all(weight_map, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.FloatTensor)
-        
-        fake_images = fake_images[0].cpu().detach().numpy().transpose(1, 2, 0)
+        fake_images = (fake_images*0.5+0.5)[0].cpu().detach().numpy().transpose(1, 2, 0)
         fake_images = np.array(fake_images*255, np.uint8)
-
-        fake_images = normalize_minmax(fake_images, [0, 255], [0, fake_images.max()])
-
         g_out_fake  = g_out_fake[0,0].cpu().detach()
         g_out_fake = -1 if g_out_fake<-1 else 1 if g_out_fake>1 else torch.round(g_out_fake,decimals=2)
         fake_images = draw_layout(label, bbox, [256,256], class_names, fake_images, g_out_fake, topleft_name='Fake-fire image')
+        
+
+        # fire_images_2 = (non_fire_images)[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
+        # fire_images_2 = np.array(fire_images_2*255, np.uint8)
+        # fire_images_2 = draw_layout(label, bbox, [256,256], class_names, fire_images_2, topleft_name='Real-fire')
+        # cv2.imshow("Real-fire", cv2.resize(cv2.cvtColor(fire_images_2.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+
+        # fire_images_2 = (non_fire_images*(1-weight_map_2))[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
+        # fire_images_2 = np.array(fire_images_2*255, np.uint8)
+        # fire_images_2 = draw_layout(label, bbox, [256,256], class_names, fire_images_2, topleft_name='Real-fire')
+        # cv2.imshow("Real-fire2", cv2.resize(cv2.cvtColor(fire_images_2.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
+
         #2) real-fire
-        if not normalized:
-            fire_images = (fire_images-0.5)*2
         fire_images = fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         fire_images = np.array(fire_images*255, np.uint8)
         g_out_real  = g_out_real[0,0].cpu().detach()
         g_out_real = -1 if g_out_real<-1 else 1 if g_out_real>1 else torch.round(g_out_real,decimals=2)
         fire_images = draw_layout(label, bbox, [256,256], class_names, fire_images, g_out_real, topleft_name='Real-fire image')
         #3) non-fire
-        if not normalized:
-            non_fire_images = (non_fire_images-0.5)*2
         non_fire_images = non_fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         non_fire_images = np.array(non_fire_images*255, np.uint8)
         non_fire_images = draw_layout(label, bbox, [256,256], class_names, non_fire_images, topleft_name='Non-fire image')
@@ -197,63 +194,94 @@ def main(args):
         stage_mask32 = stage_mask32[0].cpu().detach().numpy()
         stage_mask64 = stage_mask64[0].cpu().detach().numpy()
         stage_mask128 = stage_mask128[0].cpu().detach().numpy()   #shape [3 objs, 128, 128]
-        
-        
-       
+
         #4) soft-mask
-        embed_mask64 = normalize_minmax(np.clip(np.sum(bbox_mask64 if not use_bkg_cls else bbox_mask64[0:3:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+        embed_mask64 = normalize_minmax(np.clip(np.sum(bbox_mask64 if not use_bkg_cls else bbox_mask64[0:3:2] if (use_bkg_cls and max_num_obj==4) else bbox_mask64[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
         embed_mask64 = draw_layout(label, bbox, [256,256], class_names, input_img=embed_mask64, topleft_name='Embed mask 64x64')
         
-        soft_mask16 = normalize_minmax(np.clip(np.sum(stage_mask16 if not use_bkg_cls else stage_mask16[0:3:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+        soft_mask16 = normalize_minmax(np.clip(np.sum(stage_mask16 if not use_bkg_cls else stage_mask16[0:3:2] if (use_bkg_cls and max_num_obj==4) else stage_mask16[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
         soft_mask16 = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask16, topleft_name='Soft mask 16x16')
 
-        soft_mask32 = normalize_minmax(np.clip(np.sum(stage_mask32 if not use_bkg_cls else stage_mask32[0:3:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+        soft_mask32 = normalize_minmax(np.clip(np.sum(stage_mask32 if not use_bkg_cls else stage_mask32[0:3:2] if (use_bkg_cls and max_num_obj==4) else stage_mask32[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
         soft_mask32 = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask32, topleft_name='Soft mask 32x32')
 
-        soft_mask64 = normalize_minmax(np.clip(np.sum(stage_mask64 if not use_bkg_cls else stage_mask64[0:3:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+        soft_mask64 = normalize_minmax(np.clip(np.sum(stage_mask64 if not use_bkg_cls else stage_mask64[0:3:2] if (use_bkg_cls and max_num_obj==4) else stage_mask64[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
         soft_mask64 = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask64, topleft_name='Soft mask 64x64')
 
-        soft_mask128 = normalize_minmax(np.clip(np.sum(stage_mask128 if not use_bkg_cls else stage_mask128[0:3:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+        soft_mask128 = normalize_minmax(np.clip(np.sum(stage_mask128 if not use_bkg_cls else stage_mask128[0:3:2] if (use_bkg_cls and max_num_obj==4) else stage_mask128[0:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
         soft_mask128 = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask128, topleft_name='Soft mask 128x128')
-        
+    
         if use_bkg_cls:
-            mask128 = normalize_minmax(np.argmax((1-weight_map.cpu().numpy()[0,0:1]) * np.concatenate([stage_mask128[1:2]*2.1,stage_mask128[0:1]], axis=0), axis=0), [0,255],[0,1])
-            mask128 = draw_layout(label, bbox, [256,256], class_names, input_img=mask128, topleft_name='Mask Fire 128')
-            cv2.imshow("Mask Fire 128x128", cv2.resize(cv2.cvtColor(mask128.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
-            if label[0,2,0] == 2:
-                mask128 = normalize_minmax(np.argmax((1-weight_map.cpu().numpy()[0,1:2]) * np.concatenate([stage_mask128[3:4],stage_mask128[2:3]], axis=0), axis=0), [0,255],[0,1])
-                mask128 = draw_layout(label, bbox, [256,256], class_names, input_img=mask128, topleft_name='Mask Smoke 128')
-                cv2.imshow("Mask Smoke 128x128", cv2.resize(cv2.cvtColor(mask128.astype(np.uint8), cv2.COLOR_RGB2BGR), (256, 256)))
-            
+            if max_num_obj==4:
+                fire_bin_mask128 = normalize_minmax(np.argmax((1-weight_map_orig.cpu().numpy()[0,0:1])*np.concatenate([stage_mask128[1:2],stage_mask128[0:1]], axis=0), axis=0), [0,255], [0,1])
+                fire_mask128 = draw_layout(label, bbox, [256,256], class_names, input_img=fire_bin_mask128, topleft_name='Mask Fire 128')
+                if label[0,2,0] == 2:
+                    smoke_bin_mask128 = normalize_minmax(np.argmax((1-weight_map_orig.cpu().numpy()[0,1:2])*np.concatenate([stage_mask128[3:4],1-stage_mask128[2:3]], axis=0), axis=0), [0,255],[0,1])
+                else:
+                    smoke_bin_mask128 = np.zeros_like(fire_bin_mask128)
+                smoke_mask128 = draw_layout(label, bbox, [256,256], class_names, input_img=smoke_bin_mask128, topleft_name='Mask Smoke 128')
 
-            #5) background soft-mask
-            embed_mask64_bkg = normalize_minmax(np.clip(np.sum(bbox_mask64 if not use_bkg_cls else bbox_mask64[1:4:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
-            embed_mask64_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=embed_mask64_bkg, topleft_name='Embed mask bkg 64x64')
-            
-            soft_mask16_bkg = normalize_minmax(np.clip(np.sum(stage_mask16 if not use_bkg_cls else stage_mask16[1:4:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
-            soft_mask16_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask16_bkg, topleft_name='Soft mask bkg 16x16')
+                #5) background soft-mask
+                embed_mask64_bkg = normalize_minmax(np.clip(np.sum(bbox_mask64 if not use_bkg_cls else bbox_mask64[1:4:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+                embed_mask64_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=embed_mask64_bkg, topleft_name='Embed mask bkg 64x64')
+                
+                soft_mask16_bkg = normalize_minmax(np.clip(np.sum(stage_mask16 if not use_bkg_cls else stage_mask16[1:4:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+                soft_mask16_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask16_bkg, topleft_name='Soft mask bkg 16x16')
 
-            soft_mask32_bkg = normalize_minmax(np.clip(np.sum(stage_mask32 if not use_bkg_cls else stage_mask32[1:4:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
-            soft_mask32_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask32_bkg, topleft_name='Soft mask 32x32')
+                soft_mask32_bkg = normalize_minmax(np.clip(np.sum(stage_mask32 if not use_bkg_cls else stage_mask32[1:4:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+                soft_mask32_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask32_bkg, topleft_name='Soft mask 32x32')
 
-            soft_mask64_bkg = normalize_minmax(np.clip(np.sum(stage_mask64 if not use_bkg_cls else stage_mask64[1:4:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
-            soft_mask64_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask64_bkg, topleft_name='Soft mask 64x64')
+                soft_mask64_bkg = normalize_minmax(np.clip(np.sum(stage_mask64 if not use_bkg_cls else stage_mask64[1:4:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+                soft_mask64_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask64_bkg, topleft_name='Soft mask 64x64')
 
-            soft_mask128_bkg = normalize_minmax(np.clip(np.sum(stage_mask128 if not use_bkg_cls else stage_mask128[1:4:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
-            soft_mask128_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask128_bkg, topleft_name='Soft mask 128x128')
+                soft_mask128_bkg = normalize_minmax(np.clip(np.sum(stage_mask128 if not use_bkg_cls else stage_mask128[1:4:2], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+                soft_mask128_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask128_bkg, topleft_name='Soft mask 128x128')
 
-        # #5) hard-mask
-        # hard_mask = np.any(stage_mask128[0:2]>args.seg_mask_thresh, axis=0).astype(np.uint8)
-        # hard_mask = normalize_minmax(hard_mask, [0, 255], input_range=[0,1])
-        # hard_mask = draw_layout(label, bbox, [256,256], class_names, input_img=hard_mask, topleft_name='Hard seg-mask')
+            elif max_num_obj==3:
+                fire_bin_mask128 = normalize_minmax(np.argmax((1-weight_map_orig.cpu().numpy()[0,0:1])*np.concatenate([stage_mask128[2:3],stage_mask128[0:1]], axis=0), axis=0), [0,255],[0,1])
+                fire_mask128 = draw_layout(label, bbox, [256,256], class_names, input_img=fire_bin_mask128, topleft_name='Mask Fire 128')
+                if label[0,1,0] == 2:
+                    smoke_bin_mask128 = normalize_minmax(np.argmax((1-weight_map_orig.cpu().numpy()[0,1:2])*np.concatenate([stage_mask128[2:3]*0.5,stage_mask128[1:2]], axis=0), axis=0), [0,255],[0,1])
+                else:
+                    smoke_bin_mask128 = np.zeros_like(fire_bin_mask128)
+                smoke_mask128 = draw_layout(label, bbox, [256,256], class_names, input_img=smoke_bin_mask128, topleft_name='Mask Smoke 128')
+                
+                #5) background soft-mask
+                embed_mask64_bkg = normalize_minmax(np.clip(np.sum(bbox_mask64 if not use_bkg_cls else bbox_mask64[2:3], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+                embed_mask64_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=embed_mask64_bkg, topleft_name='Embed mask bkg 64x64')
+                
+                soft_mask16_bkg = normalize_minmax(np.clip(np.sum(stage_mask16 if not use_bkg_cls else stage_mask16[2:3], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+                soft_mask16_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask16_bkg, topleft_name='Soft mask bkg 16x16')
 
-        # output_images = combine_images([fire_images, non_fire_images, fake_images, soft_mask128, hard_mask], [256,256])
-        
-        if use_bkg_cls:
-            output_images = combine_images([fire_images, non_fire_images, fake_images, embed_mask64, soft_mask16, soft_mask32, soft_mask64, soft_mask128, embed_mask64_bkg, soft_mask16_bkg, soft_mask32_bkg, soft_mask64_bkg, soft_mask128_bkg], [256,256])
+                soft_mask32_bkg = normalize_minmax(np.clip(np.sum(stage_mask32 if not use_bkg_cls else stage_mask32[2:3], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+                soft_mask32_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask32_bkg, topleft_name='Soft mask 32x32')
+
+                soft_mask64_bkg = normalize_minmax(np.clip(np.sum(stage_mask64 if not use_bkg_cls else stage_mask64[2:3], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+                soft_mask64_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask64_bkg, topleft_name='Soft mask 64x64')
+
+                soft_mask128_bkg = normalize_minmax(np.clip(np.sum(stage_mask128 if not use_bkg_cls else stage_mask128[2:3], axis=0), a_min=0, a_max=1), [0, 255], input_range=[0,1])
+                soft_mask128_bkg = draw_layout(label, bbox, [256,256], class_names, input_img=soft_mask128_bkg, topleft_name='Soft mask 128x128')
+
         else:
-            output_images = combine_images([fire_images, non_fire_images, fake_images, embed_mask64, soft_mask16, soft_mask32, soft_mask64, soft_mask128], [256,256])
+            fire_hard_mask = np.any(stage_mask128[0:1]>args.seg_mask_thresh, axis=0).astype(np.uint8)
+            fire_hard_mask = normalize_minmax(fire_hard_mask, [0, 255], input_range=[0,1])
+            fire_mask128 = draw_layout(label, bbox, [256,256], class_names, input_img=fire_hard_mask, topleft_name='Hard Fire Seg-mask')
+            if label[0,1,0] == 2:
+                smoke_hard_mask = np.any(stage_mask128[1:2]>args.seg_mask_thresh, axis=0).astype(np.uint8)
+                smoke_hard_mask = normalize_minmax(smoke_hard_mask, [0, 255], input_range=[0,1])
+            else:
+                smoke_hard_mask = np.zeros_like(fire_hard_mask)
+            smoke_mask128 = draw_layout(label, bbox, [256,256], class_names, input_img=smoke_hard_mask, topleft_name='Hard Fire Seg-mask')
+
         
+
+        if use_bkg_cls:
+            output_images = combine_images([fire_images, non_fire_images, fake_images, fire_mask128, smoke_mask128,
+                                            embed_mask64, soft_mask16, soft_mask32, soft_mask64, soft_mask128, 
+                                            embed_mask64_bkg, soft_mask16_bkg, soft_mask32_bkg, soft_mask64_bkg, soft_mask128_bkg], [256,256])
+        else:
+            output_images = combine_images([fire_images, non_fire_images, fake_images, fire_mask128, smoke_mask128,
+                                                embed_mask64, soft_mask16, soft_mask32, soft_mask64, soft_mask128], [256,256])
 
         cv2.imshow("Test generating Fire + Mask", cv2.cvtColor(output_images.astype(np.uint8), cv2.COLOR_RGB2BGR))
         if cv2.waitKey() == 'q':

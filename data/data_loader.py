@@ -25,7 +25,7 @@ class FireDataset(Dataset):
     def __init__(self, fire_image_dir, non_fire_image_dir, classname_file, image_size=(64, 64),
                  normalize_images=True, max_samples=None, min_object_size=0.02, max_object_size = 0.8,
                  min_objects_per_image=1, max_objects_per_image=2, left_right_flip=False, get_first_fire_smoke=False,
-                 use_noise_in_crop=False, weight_map_type='extreme', test=False, debug_phase=False):
+                 weight_map_type='extreme', test=False, debug_phase=False):
         """
         A PyTorch Dataset for loading self-built fire dataset
     
@@ -49,7 +49,6 @@ class FireDataset(Dataset):
         self.max_objects_per_image =    max_objects_per_image
         self.normalize_images =         normalize_images
         self.left_right_flip =          left_right_flip
-        self.use_noise_in_crop =        use_noise_in_crop
         self.weight_map_type =          weight_map_type
         self.testing_phase =            test
         self.debug_phase =              debug_phase
@@ -170,8 +169,8 @@ class FireDataset(Dataset):
             with PIL.Image.open(f).convert("RGB") as non_fire_image:
                 if (random.random() > 0.5) if not self.testing_phase else False:
                     non_fire_image = PIL.ImageOps.mirror(non_fire_image)
-                WNF, HNF = non_fire_image.size
-                non_fire_crop = non_fire_image.copy()
+                # WNF, HNF = non_fire_image.size
+                # non_fire_crop = non_fire_image.copy()
 
         #Read annotations: 2 classes [fire, smoke]
         fire_annotation_data = copy.deepcopy(self.fire_annotation_datas[index % self.len_fire])
@@ -186,28 +185,28 @@ class FireDataset(Dataset):
         # fire_box = fire_box.resize((256, 256))
         # fire_box.show()
 
-        #Add noise to non_fire_img at the corresponding positions of fire
-        objects_for_non = copy.deepcopy(objects)
-        for object_data in objects_for_non:
-            xm, ym, w, h = object_data['bbox']
-            xm = int(xm * WNF / WF)
-            ym = int(ym * HNF / HF)
-            w = int((w) * WNF / WF)
-            h = int((h) * HNF / HF)
-            xmin = np.ceil(xm).astype(np.int32)
-            ymin = np.ceil(ym).astype(np.int32)
-            xmax = np.floor(xm+w).astype(np.int32)
-            ymax = np.floor(ym+h).astype(np.int32)
-            #create noise
-            if self.use_noise_in_crop:
-                noise = np.random.randint(0, 2, (ymax-ymin+1, xmax-xmin+1, 1), dtype=np.uint8) * 255
-                noise = np.repeat(noise, repeats=3, axis=2)
-                noise = PIL.Image.fromarray(noise, 'RGB')
-            else:
-                noise = np.zeros((ymax-ymin+1, xmax-xmin+1, 3), dtype=np.uint8)
-                noise = PIL.Image.fromarray(noise, 'RGB')
-            #Add noise to image
-            non_fire_crop.paste(noise, (xmin, ymin))
+        # #Add noise to non_fire_img at the corresponding positions of fire
+        # objects_for_non = copy.deepcopy(objects)
+        # for object_data in objects_for_non:
+        #     xm, ym, w, h = object_data['bbox']
+        #     xm = int(xm * WNF / WF)
+        #     ym = int(ym * HNF / HF)
+        #     w = int((w) * WNF / WF)
+        #     h = int((h) * HNF / HF)
+        #     xmin = np.ceil(xm).astype(np.int32)
+        #     ymin = np.ceil(ym).astype(np.int32)
+        #     xmax = np.floor(xm+w).astype(np.int32)
+        #     ymax = np.floor(ym+h).astype(np.int32)
+        #     #create noise
+        #     if self.use_noise_in_crop:
+        #         noise = np.random.randint(0, 2, (ymax-ymin+1, xmax-xmin+1, 1), dtype=np.uint8) * 255
+        #         noise = np.repeat(noise, repeats=3, axis=2)
+        #         noise = PIL.Image.fromarray(noise, 'RGB')
+        #     else:
+        #         noise = np.zeros((ymax-ymin+1, xmax-xmin+1, 3), dtype=np.uint8)
+        #         noise = PIL.Image.fromarray(noise, 'RGB')
+        #     #Add noise to image
+        #     non_fire_crop.paste(noise, (xmin, ymin))
 
 
         # #TESTING
@@ -232,7 +231,8 @@ class FireDataset(Dataset):
 
         #make weight for background / fire_region: 1 outside, 0 inside
         if self.weight_map_type == 'extreme':
-            weight_map = weigth_map_generator(np.array(boxes_weight_map), self.image_size[0], self.image_size[1])                   
+            weight_map = weigth_map_generator(np.array(boxes_weight_map), self.image_size[0], self.image_size[1], max_obj=self.max_objects_per_image)                   
+            weight_map_2 = weigth_map_generator_2(np.array(boxes_weight_map), self.image_size[0], self.image_size[1])    
         elif self.weight_map_type == 'continuous':
             weight_map = np.ones((self.max_objects_per_image, self.image_size[0], self.image_size[1]))
             for i,box in enumerate(boxes):
@@ -248,6 +248,8 @@ class FireDataset(Dataset):
             max_objs_per_img = 2
         elif self.max_objects_per_image == 3:
             max_objs_per_img = 3
+        else:
+            max_objs_per_img = self.max_objects_per_image
             
         for idx in range(len(objects), max_objs_per_img):
             if self.max_objects_per_image == 2:                         #normal: add __None__
@@ -265,39 +267,27 @@ class FireDataset(Dataset):
                 boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
                 classes.append(self.vocal['_None_'])
                 boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
+            else:
+                classes.append(self.vocal['_None_'])
+                boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
             
-            # # if idx+1 == self.max_objects_per_image and self.max_objects_per_image==4:   #if max_obj==3: add bkg_obj covering whole_image
-            # #     classes.append(self.vocal['background'])
-            # #     boxes.append(np.array([0.0, 0.0, 1.0, 1.0]))
-            # # else:    
-            # #     classes.append(self.vocal['_None_'])
-            # #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-            # if self.max_objects_per_image==4:
-            #     classes.append(self.vocal['_None_'])
-            #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-            #     classes.append(self.vocal['_None_'])
-            #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
-            # else:
-            #     classes.append(self.vocal['_None_'])
-            #     boxes.append(np.array([-0.6, -0.6, 0.5, 0.5]))
 
         classes = torch.LongTensor(classes)
         boxes = np.vstack(boxes)
-        list_images = [self.transform(x) for x in [fire_image, non_fire_image, non_fire_crop]] #The list [fire_image, non_fire_image, non_fire_crop]
+        list_images = [self.transform(x) for x in [fire_image, non_fire_image]] #The list [fire_image, non_fire_image]
 
         # #TEST
         # test_weightmap(list_images[0], weight_map)
-
         # test_img = list_images[0].clone().cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         # test_img = np.array(test_img*255, np.uint8)
-        # test_img = draw_layout(classes.unsqueeze(0), torch.FloatTensor(boxes).unsqueeze(0), (128,128), self.class_names, input_img=test_img)
+        # test_img = draw_layout(classes[0:2].unsqueeze(0), torch.FloatTensor(boxes[0:2]).unsqueeze(0), (256,256), self.class_names, input_img=test_img)
         # cv2.imshow("test img", cv2.resize(cv2.cvtColor(test_img.astype(np.uint8), cv2.COLOR_RGB2BGR), (306,306)))
         # # if index in [2671, 2495, 1062, 2186, 2345, 2538] or index in (np.array([611, 2671, 688, 2495, 1062, 2186, 2345, 2538])+3236):
         # # print(index, flip)
         # if cv2.waitKey() == ord('s'):
         #     print(fire_image_file)
 
-        return list_images, classes, boxes, weight_map
+        return list_images, classes, boxes, [weight_map, weight_map_2]
 
 def test_weightmap(image, weight):
     weight_map = np.repeat(np.expand_dims(np.all(weight, axis=0), axis=0), axis=0, repeats=3)
@@ -327,7 +317,7 @@ def draw_bbox(image, bboxes):
     return image
 
 #create "extreme" weight_map using method in generator
-def weigth_map_generator(bbox, H, W):
+def weigth_map_generator(bbox, H, W, max_obj=None):
     num_bbox = bbox.shape[0]
     xm, ym, ww, hh = bbox[:, 0:1], bbox[:,1:2], bbox[:,2:3], bbox[:,3:4]
     x = np.repeat(np.expand_dims(np.linspace(0,1,num=W+1)[0:W],axis=0),axis=0,repeats=num_bbox) #2x128
@@ -336,6 +326,29 @@ def weigth_map_generator(bbox, H, W):
     y = (y - ym) / hh       #([bo, H] - [bo, H])/[bo, H]
     x = np.repeat(np.expand_dims((x < 0) + (x > 1), axis=1),axis=1, repeats=H)
     y = np.repeat(np.expand_dims((y < 0) + (y > 1), axis=2),axis=2, repeats=W)
+    weight_map = (x+y).astype(np.float32)
+    if num_bbox == 1:
+        weight_map = np.concatenate([weight_map, np.ones(weight_map.shape)], axis=0)
+    
+    elif max_obj==8:
+        weight_map_2 = np.zeros((max_obj, weight_map.shape[1], weight_map.shape[2]), dtype=np.float32)
+        weight_map_2[0:num_bbox,:,:] = weight_map
+        return weight_map_2
+    
+    return weight_map
+
+
+
+#create "extreme" weight_map using method in generator
+def weigth_map_generator_2(bbox, H, W):
+    num_bbox = bbox.shape[0]
+    xm, ym, ww, hh = bbox[:, 0:1], bbox[:,1:2], bbox[:,2:3], bbox[:,3:4]
+    x = np.repeat(np.expand_dims(np.linspace(0,1,num=W+1)[0:W],axis=0),axis=0,repeats=num_bbox) #2x128
+    y = np.repeat(np.expand_dims(np.linspace(0,1,num=H+1)[0:H],axis=0),axis=0,repeats=num_bbox) #2x128
+    x = (x - xm) / ww       #([bo, W] - [bo, W])/[bo, W]
+    y = (y - ym) / hh       #([bo, H] - [bo, H])/[bo, H]
+    x = np.repeat(np.expand_dims((x < -0.1) + (x > 1.1), axis=1),axis=1, repeats=H)
+    y = np.repeat(np.expand_dims((y < -0.1) + (y > 1.1), axis=2),axis=2, repeats=W)
     weight_map = (x+y).astype(np.float32)
     if num_bbox == 1:
         weight_map = np.concatenate([weight_map, np.ones(weight_map.shape)], axis=0)
