@@ -63,12 +63,9 @@ def main(args):
     #Special configurations: Developing phase
     weight_map_type = 'extreme'     #'extreme' creates weight_map 0 inside/1 outside bboxes
     
-    max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
-    get_first_fire_smoke = True if max_num_obj==2 else False    
-    
+    max_num_obj = 2                 #if max_obj=2, get random first fire and smoke
     use_bkg_cls = True             #bboxes do not cover whole image --> True: add 1 bkg_cls + bkg_noise_embedding_input as random
-    bkg_bbox_cover_whole = False    #bbox of bkg_cls cover whole image
-    use_enc_feat_as_bkg_cls_noise = False           #transform encoded features using FC to bkg_cls noise input
+    bkg_bbox_cover_whole = True    #bbox of bkg_cls cover whole image
     
     if use_bkg_cls and not bkg_bbox_cover_whole:
         max_num_obj *= 2
@@ -78,7 +75,7 @@ def main(args):
     use_res11 = False                               #use residual block 11
     use_D1_img_loss = 0                             #cases: 0 - no use, 1 - use for only fire image, 2 - use for both fire and non-fire image
     use_bkg_net_D = True                            #use bkg_D for background region
-    use_mask_to_add_bkg_in_obj_loss_in_epoch = 180  #compute bkg_region(inside bbox) loss using binary mask from prediction, 0 = not used
+    use_mask_to_add_bkg_in_obj_loss_in_epoch = 0  #compute bkg_region(inside bbox) loss using binary mask from prediction, 0 = not used
     use_ssim_net_G = False                          #replace L1-loss by ssim-loss
     use_identity_loss = False                       #Later: use identity loss when input as fire-images
     use_instance_noise_input_D = False              #add Gaussian noise to input of D
@@ -121,7 +118,6 @@ def main(args):
                                 image_size=img_size, 
                                 left_right_flip=True,
                                 max_objects_per_image=max_num_obj,
-                                get_first_fire_smoke=get_first_fire_smoke,
                                 weight_map_type=weight_map_type,
                                 debug_phase=debug_phase)
 
@@ -134,7 +130,7 @@ def main(args):
 
     #Model
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3, z_obj_random_dim=z_obj_random_dim, z_obj_class_dim=z_obj_cls_dim, 
-                              enc_feat_as_bkg_noise=use_enc_feat_as_bkg_cls_noise, random_input_noise=use_random_input_noise_w_enc_feat, use_res11=use_res11).cuda()
+                              random_input_noise=use_random_input_noise_w_enc_feat, use_res11=use_res11).cuda()
     netD = CombineDiscriminator128(num_classes=num_classes).cuda()
     if use_bkg_net_D:
         netD2 = BkgResnetDiscriminator128(num_classes=num_classes).cuda()
@@ -155,7 +151,7 @@ def main(args):
         if value.requires_grad:
             dis_parameters += [{'params': [value], 'lr': d_lr/2}]
     d_optimizer = torch.optim.Adam(dis_parameters, betas=(0.5, 0.999))
-    # d_optimizer = torch.optim.SGD(dis_parameters)
+
     if use_bkg_net_D:
         #bkg: non-fire/fake-non-fire
         dis2_parameters = []
@@ -163,7 +159,6 @@ def main(args):
             if value.requires_grad:
                 dis2_parameters += [{'params': [value], 'lr': d_lr/2}]
         d2_optimizer = torch.optim.Adam(dis2_parameters, betas=(0.5, 0.999))
-        # d2_optimizer = torch.optim.SGD(dis2_parameters)
 
     if not os.path.exists(args.out_path):
         os.mkdir(args.out_path)
@@ -194,15 +189,15 @@ def main(args):
         if use_bkg_net_D:
             netD2.train()
         else:
-            d2_loss_real = torch.tensor([0])
-            d2_loss_fake = torch.tensor([0])
-            d2_loss = torch.tensor([0])
-            g2_loss_fake = torch.tensor([0])
+            d2_loss_real =  torch.tensor([0])
+            d2_loss_fake =  torch.tensor([0])
+            d2_loss =       torch.tensor([0])
+            g2_loss_fake =  torch.tensor([0])
         if use_ssim_net_G:
-            pixel_loss = torch.tensor([0])
+            pixel_loss =    torch.tensor([0])
             obj_pixel_loss = torch.tensor([0])     
         else:
-            ssim_loss = torch.tensor([0])
+            ssim_loss =     torch.tensor([0])
             obj_ssim_loss = torch.tensor([0])
         if not use_identity_loss:
             rec_pixel_loss = torch.tensor([0])
@@ -276,64 +271,63 @@ def main(args):
             else: #normal training of D
                 # update D network
                 netD.zero_grad()
-                if not use_bkg_cls and not bkg_bbox_cover_whole:
-                    label_obj = label.clone()
-                    label_bkg = None
-                    bbox_obj = bbox.clone()
-                    bbox_bkg = None
-                elif use_bkg_cls and bkg_bbox_cover_whole:
-                    label_obj = label[:,0:max_num_obj-1,:]
-                    label_bkg = label[:,max_num_obj-1:,:]
-                    bbox_obj = bbox[(label.cpu()!=3).squeeze()].view(-1,max_num_obj-1,4)
-                    bbox_bkg = bbox[(label.cpu()==3).squeeze()].view(-1,1,4)
-                elif use_bkg_cls and not bkg_bbox_cover_whole:
-                    label_obj = label[:,0::2,:]
-                    label_bkg = label[:,1::2,:]
-                    bbox_obj = bbox[:,0::2,:]
-                    bbox_bkg = bbox[:,1::2,:]
-                else:
-                    raise ValueError("Configuration is wrong!: use_bkg_cls={} but bkg_bbox_cover_whole={}".format(use_bkg_cls, bkg_bbox_cover_whole))
+                # if not use_bkg_cls and not bkg_bbox_cover_whole:
+                #     label_obj = label.clone()
+                #     label_bkg = None
+                #     bbox_obj = bbox.clone()
+                #     bbox_bkg = None
+                # elif use_bkg_cls and bkg_bbox_cover_whole:
+                #     label_obj = label[:,0:max_num_obj-1,:]
+                #     label_bkg = label[:,max_num_obj-1:,:]
+                #     bbox_obj = bbox[(label.cpu()!=3).squeeze()].view(-1,max_num_obj-1,4)
+                #     bbox_bkg = bbox[(label.cpu()==3).squeeze()].view(-1,1,4)
+                # elif use_bkg_cls and not bkg_bbox_cover_whole:
+                #     label_obj = label[:,0::2,:]
+                #     label_bkg = label[:,1::2,:]
+                #     bbox_obj = bbox[:,0::2,:]
+                #     bbox_bkg = bbox[:,1::2,:]
+                # else:
+                #     raise ValueError("Configuration is wrong!: use_bkg_cls={} but bkg_bbox_cover_whole={}".format(use_bkg_cls, bkg_bbox_cover_whole))
                 
-                #1) real fire-image+objects
+                #1) real fire-image+objects(including bkg)
                 if use_instance_noise_input_D:
-                    d_out_rimg_fire, d_out_robj = netD(add_normal_noise_input_D(fire_images), bbox_obj.cuda(), label_obj)
+                    d_out_rimg_fire, d_out_robj = netD(add_normal_noise_input_D(fire_images), bbox.cuda(), label)
                 else:
-                    d_out_rimg_fire, d_out_robj = netD(fire_images, bbox_obj.cuda(), label_obj)
-                d_loss_rimg_fire = torch.tensor([0]).cuda() if use_D1_img_loss==0 else torch.nn.ReLU()(1.0 - d_out_rimg_fire).mean()
+                    d_out_rimg_fire, d_out_robj = netD(fire_images, bbox.cuda(), label)
+                d_loss_rimg_fire = torch.tensor(0).cuda() if use_D1_img_loss==0 else torch.nn.ReLU()(1.0 - d_out_rimg_fire).mean()
                 d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
                 
-                #2) real nonfire-image+bkg
-                if use_instance_noise_input_D:
-                    d_out_rimg_nonfire, d_out_rbkg = netD(add_normal_noise_input_D(non_fire_images), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
-                else:
-                    d_out_rimg_nonfire, d_out_rbkg = netD(non_fire_images, bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
-                d_loss_rimg_nonfire = torch.tensor([0]).cuda() if (use_D1_img_loss==0 or use_D1_img_loss==1) else torch.nn.ReLU()(1.0 - d_out_rimg_nonfire).mean()
-                if d_out_rbkg==None:
-                    d_loss_rbkg = torch.tensor([0]).cuda()
-                else:
-                    d_loss_rbkg = torch.nn.ReLU()(1.0 - d_out_rbkg).mean()
+                # #2) real nonfire-image+bkg
+                # if use_instance_noise_input_D:
+                #     d_out_rimg_nonfire, d_out_rbkg = netD(add_normal_noise_input_D(non_fire_images), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
+                # else:
+                #     d_out_rimg_nonfire, d_out_rbkg = netD(non_fire_images, bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
+                # d_loss_rimg_nonfire = torch.tensor([0]).cuda() if (use_D1_img_loss==0 or use_D1_img_loss==1) else torch.nn.ReLU()(1.0 - d_out_rimg_nonfire).mean()
+                # if d_out_rbkg==None:
+                #     d_loss_rbkg = torch.tensor([0]).cuda()
+                # else:
+                #     d_loss_rbkg = torch.nn.ReLU()(1.0 - d_out_rbkg).mean()
                 
                 #3) fake fire-image+objects+bkg
                 if use_instance_noise_input_D:
-                    d_out_fimg_fire, d_out_fobj = netD(add_normal_noise_input_D(fake_images.detach()), bbox_obj.cuda(), label_obj)
-                    _, d_out_fbkg = netD(add_normal_noise_input_D(fake_images.detach()), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
+                    d_out_fimg_fire, d_out_fobj = netD(add_normal_noise_input_D(fake_images.detach()), bbox.cuda(), label)
+                    # _, d_out_fbkg = netD(add_normal_noise_input_D(fake_images.detach()), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
                 else:
-                    d_out_fimg_fire, d_out_fobj = netD(fake_images.detach(), bbox_obj.cuda(), label_obj)
-                    _, d_out_fbkg = netD(fake_images.detach(), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
-                d_loss_fimg_fire = torch.tensor([0]).cuda() if use_D1_img_loss==0 else torch.nn.ReLU()(1.0 + d_out_fimg_fire).mean()
+                    d_out_fimg_fire, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
+                    # _, d_out_fbkg = netD(fake_images.detach(), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
+                d_loss_fimg_fire = torch.tensor(0).cuda() if use_D1_img_loss==0 else torch.nn.ReLU()(1.0 + d_out_fimg_fire).mean()
                 d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
-                if d_out_fbkg==None:
-                    d_loss_fbkg = torch.tensor([0]).cuda()
-                else:
-                    d_loss_fbkg = torch.nn.ReLU()(1.0 + d_out_fbkg).mean()
+                # if d_out_fbkg==None:
+                #     d_loss_fbkg = torch.tensor([0]).cuda()
+                # else:
+                #     d_loss_fbkg = torch.nn.ReLU()(1.0 + d_out_fbkg).mean()
 
                 #7 losses: real fire, real non-fire, fake fire, real_obj, real_bkg, fake_obj, fake_bkg
 
-                d_loss = lamb_obj * (d_loss_robj + d_loss_rbkg*0.1 + d_loss_fobj + d_loss_fbkg*0.1) + \
-                        (lamb_img/2) * (d_loss_rimg_fire + d_loss_rimg_nonfire + d_loss_fimg_fire)
+                d_loss = lamb_obj * (d_loss_robj + d_loss_fobj)# + d_loss_rbkg*0.1 + d_loss_fbkg*0.1)
+                d_loss += (lamb_img/2) * (d_loss_rimg_fire + d_loss_fimg_fire)# + d_loss_rimg_nonfire)
                 d_loss.backward()
                 d_optimizer.step()
-
 
             d_target = torch.ones([d_out_rimg_fire.shape[0],1], dtype=torch.bool).cuda()
             d1_real_acc_cnt += torch.sum((d_out_rimg_fire>0) == d_target).item()
@@ -380,78 +374,81 @@ def main(args):
             d2_fake_bkg += d2_loss_fake*lamb_img
             d2_all += d2_loss
 
-            # update G network 
-            netG.zero_grad()
-            #Adversarial loss from D1
-            if use_instance_noise_input_D:
-                g_out_fimg, g_out_fobj = netD(add_normal_noise_input_D(fake_images), bbox_obj.cuda(), label_obj)
-                _, g_out_fbkg = netD(add_normal_noise_input_D(fake_images), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
-            else:
-                g_out_fimg, g_out_fobj = netD(fake_images, bbox_obj.cuda(), label_obj)
-                _, g_out_fbkg = netD(fake_images, bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
-            g_loss_fimg = torch.tensor([0]).cuda() if use_D1_img_loss==0 else -g_out_fimg.mean()
-            g_loss_fobj = -g_out_fobj.mean()
-            if g_out_fbkg==None:
-                g_loss_fbkg = torch.tensor([0]).cuda()
-            else:
-                g_loss_fbkg = -g_out_fbkg.mean()
-            
-            #Adversarial loss from D2
-            if use_bkg_net_D:
+            # update G network
+            if (idx % 1) == 0:
+                netG.zero_grad()
+                #Adversarial loss from D1
                 if use_instance_noise_input_D:
-                    g2_out_fake = netD2(add_normal_noise_input_D(fake_images*(weight_map)))
+                    g_out_fimg, g_out_fobj = netD(add_normal_noise_input_D(fake_images), bbox.cuda(), label)
+                    # _, g_out_fbkg = netD(add_normal_noise_input_D(fake_images), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
                 else:
-                    g2_out_fake = netD2(fake_images*(weight_map))
-                g2_loss_fake = - g2_out_fake.mean()
-
-            #structure similarity loss
-            if use_ssim_net_G:
-                ssim_loss = ssim((fake_images*0.5+0.5)*(weight_map), (non_fire_images*0.5+0.5)*(weight_map))
-                obj_ssim_loss = ssim((fake_images*0.5+0.5)*(1-weight_map), (fire_images*0.5+0.5)*(1-weight_map))
-            else:
-                pixel_loss = l1_loss(fake_images*(weight_map), non_fire_images*(weight_map)).mean()
-                obj_pixel_loss = l1_loss(fake_images*(1-weight_map), fire_images*(1-weight_map)).mean()
-                if use_bkg_cls:
-                    bkg_pixel_loss = l1_loss(fake_images*(1-weight_map), non_fire_images*(1-weight_map)).mean()     #bkg_region inside bbox
-
-            #reconstruction loss
-            feat_loss = vgg_loss(fake_images*(weight_map), non_fire_images*(weight_map)).mean()
-            obj_feat_loss = vgg_loss(fake_images*(1-weight_map), fire_images*(1-weight_map)).mean()
-            if use_bkg_cls:
-                bkg_feat_loss = vgg_loss(fake_images*(1-weight_map), non_fire_images*(1-weight_map)).mean()
-
-            #Identity loss
-            if use_identity_loss:
-                rec_images, _ = netG(z_img=fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
-                rec_pixel_loss = l1_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
-                rec_feat_loss = vgg_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
-
-            if use_mask_to_add_bkg_in_obj_loss_in_epoch and epoch>use_mask_to_add_bkg_in_obj_loss_in_epoch:
-                feat_loss = vgg_loss(fake_images*(1-weight_map_3), non_fire_images*(1-weight_map_3)).mean()
-                pixel_loss = l1_loss(fake_images*(1-weight_map_3), non_fire_images*(1-weight_map_3)).mean()
-
-                g_loss = (g_loss_fobj + g_loss_fbkg) * lamb_obj + g_loss_fimg * (lamb_img/2) + pixel_loss + feat_loss
-
-            else:
-                #Total losses
-                g_loss = (g_loss_fobj + g_loss_fbkg) * lamb_obj + g_loss_fimg * (lamb_img/2) + feat_loss + obj_feat_loss
-                #
+                    g_out_fimg, g_out_fobj = netD(fake_images, bbox.cuda(), label)
+                    # _, g_out_fbkg = netD(fake_images, bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
+                g_loss_fimg = torch.tensor([0]).cuda() if use_D1_img_loss==0 else -g_out_fimg.mean()
+                g_loss_fobj = -g_out_fobj.mean()
+                # if g_out_fbkg==None:
+                #     g_loss_fbkg = torch.tensor([0]).cuda()
+                # else:
+                #     g_loss_fbkg = -g_out_fbkg.mean()
+                
+                #Adversarial loss from D2
                 if use_bkg_net_D:
-                    g_loss += g2_loss_fake * lamb_img
-                #
-                if use_bkg_cls:
-                    g_loss += (bkg_pixel_loss + bkg_feat_loss) * 0.1
-                #
-                if use_ssim_net_G:
-                    g_loss += ssim_loss + obj_ssim_loss
-                else:
-                    g_loss += pixel_loss + obj_pixel_loss
-                # skip now
-                if use_identity_loss:
-                    g_loss += (rec_pixel_loss + rec_feat_loss) * lamb_obj * lamb_iden
+                    if use_instance_noise_input_D:
+                        g2_out_fake = netD2(add_normal_noise_input_D(fake_images*(weight_map)))
+                    else:
+                        g2_out_fake = netD2(fake_images*(weight_map))
+                    g2_loss_fake = - g2_out_fake.mean()
 
-            g_loss.backward()
-            g_optimizer.step()
+                #structure similarity loss
+                if use_ssim_net_G:
+                    ssim_loss = ssim((fake_images*0.5+0.5)*(weight_map), (non_fire_images*0.5+0.5)*(weight_map))
+                    obj_ssim_loss = ssim((fake_images*0.5+0.5)*(1-weight_map), (fire_images*0.5+0.5)*(1-weight_map))
+                else:
+                    pixel_loss = l1_loss(fake_images*(weight_map), non_fire_images*(weight_map)).mean()
+                    obj_pixel_loss = l1_loss(fake_images*(1-weight_map), fire_images*(1-weight_map)).mean()
+                    if use_bkg_cls:
+                        bkg_pixel_loss = l1_loss(fake_images*(1-weight_map), non_fire_images*(1-weight_map)).mean()     #bkg_region inside bbox
+
+                #reconstruction loss
+                feat_loss = vgg_loss(fake_images*(weight_map), non_fire_images*(weight_map)).mean()
+                obj_feat_loss = vgg_loss(fake_images*(1-weight_map), fire_images*(1-weight_map)).mean()
+                if use_bkg_cls:
+                    bkg_feat_loss = vgg_loss(fake_images*(1-weight_map), non_fire_images*(1-weight_map)).mean()
+
+                #Identity loss
+                if use_identity_loss:
+                    rec_images, _ = netG(z_img=fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))
+                    rec_pixel_loss = l1_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
+                    rec_feat_loss = vgg_loss(rec_images*(1-weight_map), fire_images*(1-weight_map)).mean()
+
+                if use_mask_to_add_bkg_in_obj_loss_in_epoch and epoch>use_mask_to_add_bkg_in_obj_loss_in_epoch:
+                    feat_loss = vgg_loss(fake_images*(1-weight_map_3), non_fire_images*(1-weight_map_3)).mean()
+                    pixel_loss = l1_loss(fake_images*(1-weight_map_3), non_fire_images*(1-weight_map_3)).mean()
+
+                    # g_loss = (g_loss_fobj + g_loss_fbkg) * lamb_obj + g_loss_fimg * (lamb_img/2) + pixel_loss + feat_loss
+                    g_loss = g_loss_fobj * lamb_obj + g_loss_fimg * (lamb_img/2) + pixel_loss + feat_loss
+
+                else:
+                    #Total losses
+                    # g_loss = (g_loss_fobj + g_loss_fbkg) * lamb_obj + g_loss_fimg * (lamb_img/2) + feat_loss + obj_feat_loss
+                    g_loss = g_loss_fobj * lamb_obj + g_loss_fimg * (lamb_img/2) + feat_loss + obj_feat_loss
+                    #
+                    if use_bkg_net_D:
+                        g_loss += g2_loss_fake * lamb_img
+                    #
+                    if use_bkg_cls:
+                        g_loss += (bkg_pixel_loss + bkg_feat_loss) * 0.1
+                    #
+                    if use_ssim_net_G:
+                        g_loss += ssim_loss + obj_ssim_loss
+                    else:
+                        g_loss += pixel_loss + obj_pixel_loss
+                    # skip now
+                    if use_identity_loss:
+                        g_loss += (rec_pixel_loss + rec_feat_loss) * lamb_obj * lamb_iden
+
+                g_loss.backward()
+                g_optimizer.step()
 
             writer.add_scalar("iter_g_loss/g_fake_img", g_loss_fimg*(lamb_img/2), global_step=global_steps)
             writer.add_scalar("iter_g_loss/g_fake_obj", g_loss_fobj*lamb_obj, global_step=global_steps)
@@ -679,7 +676,7 @@ def main(args):
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode',           type=str,   default="train",            help="processing phase: train, test")
-    parser.add_argument('--dataset',        type=str,   default="fire3",            help="dataset used for training")
+    parser.add_argument('--dataset',        type=str,   default="fire6",            help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
     parser.add_argument('--batch_size',     type=int,   default=16,                 help="training batch size. Default: 8")
     parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")
