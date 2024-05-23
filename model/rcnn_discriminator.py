@@ -5,30 +5,63 @@ from torchvision.ops import RoIAlign as ROIAlign
 
 
 class BkgResnetDiscriminator128(nn.Module):
-    def __init__(self, num_classes=0, input_dim=3, ch=64):
+    def __init__(self, num_classes=0, input_dim=3, ch=64, input_size=128):
         super(BkgResnetDiscriminator128, self).__init__()
         self.num_classes = num_classes
+        self.input_size = input_size
 
         self.block1 = OptimizedBlock(input_dim, ch, downsample=True)
         self.block2 = ResBlock(ch, ch*2, downsample=True)
         self.block3 = ResBlock(ch*2, ch*4, downsample=True)
-        self.block4 = ResBlock(ch*4, ch*8, downsample=True)
-        self.block5 = ResBlock(ch*8, ch*16, downsample=True)
-        self.block6 = ResBlock(ch*16, ch*16, downsample=False)
-        self.l7 = nn.utils.spectral_norm(nn.Linear(ch * 16, 1))
+        
+        self.roi_align_s = ROIAlign((8, 8), 1.0 / 4.0, int(0))
+        self.roi_align_l = ROIAlign((8, 8), 1.0 / 8.0, int(0))
+
+        self.block_obj3 = ResBlock(ch*2, ch*4, downsample=False)
+        self.block_obj4 = ResBlock(ch*4, ch*8, downsample=False)
+        self.block_obj5 = ResBlock(ch*8, ch*16, downsample=True)
+        self.l_obj = nn.utils.spectral_norm(nn.Linear(ch * 16, 1))
+        self.l_y = nn.utils.spectral_norm(nn.Embedding(num_classes, ch*16))
         self.activation = nn.ReLU()
 
-    def forward(self, x):
+    def forward(self, x, bbox, label):
+        idx = torch.arange(start=0, end=x.size(0),
+                        device=x.device).view(x.size(0),
+                                                    1, 1).expand(-1, bbox.size(1), -1).float()
+        bbox[:, :, 2] = bbox[:, :, 2] + bbox[:, :, 0]       #w -> xmax
+        bbox[:, :, 3] = bbox[:, :, 3] + bbox[:, :, 1]       #h -> ymax
+        bbox = bbox * x.size(2)                        #convert [0,1] to [0, image_size]
+        bbox = torch.cat((idx, bbox.float()), dim=2)        #dim-2 : [batch_id, xmin, ymin, xmax, ymax]
+        bbox = bbox.view(-1, 5)
+        label = label.contiguous().view(-1)
+        idx = (label != 0).nonzero().view(-1)               #position of objects in bbox shape [b*o, bbox]
+        bbox = bbox[idx]                                    #extract bbox and class_id
+        label = label[idx]
+        
+        num_bbox = bbox.size(0)
+        s_idx = ((bbox[:, 3] - bbox[:, 1]) < int(self.input_size/2)) * ((bbox[:, 4] - bbox[:, 2]) < int(self.input_size/2)) #bbox < 64x64 --> small, other --> large
+        bbox_l, bbox_s = bbox[~s_idx], bbox[s_idx]  #bbox
+        label_l, label_s = label[~s_idx], label[s_idx]              #class_id
+
         x = self.block1(x)      # 64x64x64
-        x = self.block2(x)     # 32x32x128
-        x = self.block3(x)    # 16x16x256
-        x = self.block4(x)     # 8x8x512
-        x = self.block5(x)      # 4x4x1024
-        x = self.block6(x)      # 4x4x1024
-        x = self.activation(x)  # [batch, 1024, 4, 4]
-        x = torch.sum(x, dim=(2, 3))    #[batch, 1024]
-        out_im = self.l7(x)     # [batch, 1]
-        return out_im
+        x1 = self.block2(x)     # 32x32x128
+        x2 = self.block3(x1)    # 16x16x256
+        
+        obj_feat_s = self.block_obj3(x1)            #32x32x256
+        obj_feat_s = self.block_obj4(obj_feat_s)    #32x32x512
+        obj_feat_s = self.roi_align_s(obj_feat_s, bbox_s)
+
+        obj_feat_l = self.block_obj4(x2)            #16x16x512
+        obj_feat_l = self.roi_align_l(obj_feat_l, bbox_l)
+
+        obj_feat = torch.cat([obj_feat_l, obj_feat_s], dim=0)
+        label = torch.cat([label_l, label_s], dim=0)
+        obj_feat = self.block_obj5(obj_feat)        #[num_obj, 1024, 4, 4]
+        obj_feat = self.activation(obj_feat)
+        obj_feat = torch.sum(obj_feat, dim=(2, 3))  #[num_obj, 1024]
+        out_obj = self.l_obj(obj_feat)              #[num_obj, 1]
+        out_obj = out_obj + torch.sum(self.l_y(label).view(num_bbox, -1) * obj_feat.view(num_bbox, -1), dim=1, keepdim=True)
+        return out_obj
 
 
 class CombineDiscriminator128(nn.Module):
