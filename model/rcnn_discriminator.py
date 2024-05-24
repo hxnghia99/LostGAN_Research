@@ -13,6 +13,10 @@ class BkgResnetDiscriminator128(nn.Module):
         self.block1 = OptimizedBlock(input_dim, ch, downsample=True)
         self.block2 = ResBlock(ch, ch*2, downsample=True)
         self.block3 = ResBlock(ch*2, ch*4, downsample=True)
+        self.block4 = ResBlock(ch*4, ch*8, downsample=True)
+        self.block5 = ResBlock(ch*8, ch*16, downsample=True)
+        self.block6 = ResBlock(ch*16, ch*16, downsample=False)
+        self.l7 = nn.utils.spectral_norm(nn.Linear(ch * 16, 1))
         
         self.roi_align_s = ROIAlign((8, 8), 1.0 / 4.0, int(0))
         self.roi_align_l = ROIAlign((8, 8), 1.0 / 8.0, int(0))
@@ -46,7 +50,13 @@ class BkgResnetDiscriminator128(nn.Module):
         x = self.block1(x)      # 64x64x64
         x1 = self.block2(x)     # 32x32x128
         x2 = self.block3(x1)    # 16x16x256
-        
+        x = self.block4(x2)     # 8x8x512
+        x = self.block5(x)      # 4x4x1024
+        x = self.block6(x)      # 4x4x1024
+        x = self.activation(x)  # [batch, 1024, 4, 4]
+        x = torch.sum(x, dim=(2, 3))    #[batch, 1024]
+        out_im = self.l7(x)     # [batch, 1]
+
         obj_feat_s = self.block_obj3(x1)            #32x32x256
         obj_feat_s = self.block_obj4(obj_feat_s)    #32x32x512
         obj_feat_s = self.roi_align_s(obj_feat_s, bbox_s)
@@ -61,7 +71,7 @@ class BkgResnetDiscriminator128(nn.Module):
         obj_feat = torch.sum(obj_feat, dim=(2, 3))  #[num_obj, 1024]
         out_obj = self.l_obj(obj_feat)              #[num_obj, 1]
         out_obj = out_obj + torch.sum(self.l_y(label).view(num_bbox, -1) * obj_feat.view(num_bbox, -1), dim=1, keepdim=True)
-        return out_obj
+        return out_im, out_obj
 
 
 class CombineDiscriminator128(nn.Module):

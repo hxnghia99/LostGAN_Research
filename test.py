@@ -19,17 +19,14 @@ from utils.util import draw_layout, IS_compute_np, truncted_random, normalize_mi
 def main(args):
     #Common
     args.mode = 'train'
-    args.G_path = "./outputs/model_test/062_FireGAN_bkgcls_whole/G_200.pth"
-    args.D_path = "./outputs/model_test/062_FireGAN_bkgcls_whole/D_200.pth"
+    args.G_path = "./outputs/model_test/051_FireGAN_/G_200.pth"
+    args.D_path = "./outputs/model_test/051_FireGAN_/D_200.pth"
     img_size = (args.img_size, args.img_size)
 
     #Special: Test
     max_num_obj = 2                 #if max_obj=2, get only first fire and smoke
-    get_first_fire_smoke = True if max_num_obj==2 else False    
-    
     use_bkg_cls = True             #bboxes do not cover whole image --> True: add 1 bkg_cls + bkg_noise_embedding_input as random
     bkg_bbox_cover_whole = True
-    use_enc_feat_as_bkg_cls_noise = False           #transform encoded features using FC to bkg_cls noise input
 
     if use_bkg_cls and not bkg_bbox_cover_whole:
         max_num_obj *= 2
@@ -74,7 +71,6 @@ def main(args):
                                 classname_file=classname_file,
                                 image_size=img_size,
                                 max_objects_per_image=max_num_obj,
-                                get_first_fire_smoke=get_first_fire_smoke,
                                 test=phase_testing)
 
         with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
@@ -87,7 +83,7 @@ def main(args):
 
 
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3, z_obj_random_dim=z_obj_random_dim, z_obj_class_dim=z_obj_cls_dim,
-                              enc_feat_as_bkg_noise=use_enc_feat_as_bkg_cls_noise, random_input_noise=use_random_input_noise_w_enc_feat, test=phase_testing, use_res11=use_res11).cuda()
+                              random_input_noise=use_random_input_noise_w_enc_feat, test=phase_testing, use_res11=use_res11).cuda()
     netD = CombineDiscriminator128(num_classes=num_classes).cuda()
 
     if not os.path.isfile(args.G_path):
@@ -142,7 +138,7 @@ def main(args):
         # weight_map = torch.all(weight_map_orig, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
         # weight_map_2 = torch.all(weight_map_2_orig, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
 
-        z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=phase_testing)).float().cuda()
+        z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=False)).float().cuda()
  
         #Forward()
         fake_images, stage_mask128, [bbox_mask64, stage_mask16, stage_mask32, stage_mask64] = netG(z_img=non_fire_images, z_obj=z_obj, bbox=bbox.cuda(), class_label=label.squeeze(dim=-1))                 #bbox: 8x4 (coors), z_obj:8x128 random, z_im: 128

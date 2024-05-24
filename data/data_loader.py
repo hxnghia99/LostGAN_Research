@@ -9,6 +9,7 @@ import numpy as np
 import random
 import PIL
 import cv2
+import shutil
 from utils.util import draw_layout, create_continuous_map
 
 
@@ -107,6 +108,9 @@ class FireDataset(Dataset):
                 annotation_datas.append(None)
             else:    
                 annotation_datas.append(annotation_data)
+                # image = cv2.cvtColor(cv2.imread(fire_image_files[idx]), cv2.COLOR_BGR2HSV)
+                # if image[:,:,2].mean()>100:
+                #     shutil.copy(fire_image_files[idx], fire_image_files[idx].replace("train_images_A", "train_images_AA"))
         
         self.fire_annotation_datas = list(compress(annotation_datas,filtered_annotation_flag))
         self.fire_image_files = list(compress(fire_image_files,filtered_annotation_flag))
