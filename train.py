@@ -87,7 +87,7 @@ def main(args):
     z_obj_cls_dim = 128
     img_size = (args.img_size, args.img_size)
     lamb_obj = 1.0
-    lamb_img = 0.1
+    lamb_img = 0.05
     lamb_iden = 0.2
     g_lr, d_lr = args.g_lr, args.d_lr
     
@@ -149,7 +149,7 @@ def main(args):
     dis_parameters = []
     for key, value in dict(netD.named_parameters()).items():
         if value.requires_grad:
-            dis_parameters += [{'params': [value], 'lr': d_lr/2}]
+            dis_parameters += [{'params': [value], 'lr': d_lr}]
     d_optimizer = torch.optim.Adam(dis_parameters, betas=(0.5, 0.999))
 
     if use_bkg_net_D:
@@ -157,7 +157,7 @@ def main(args):
         dis2_parameters = []
         for key, value in dict(netD2.named_parameters()).items():
             if value.requires_grad:
-                dis2_parameters += [{'params': [value], 'lr': d_lr/2}]
+                dis2_parameters += [{'params': [value], 'lr': d_lr}]
         d2_optimizer = torch.optim.Adam(dis2_parameters, betas=(0.5, 0.999))
 
     if not os.path.exists(args.out_path):
@@ -366,8 +366,8 @@ def main(args):
                 d2_loss_fimg = torch.nn.ReLU()(1.0 + d2_out_fimg).mean()
                 d2_loss_fobj = torch.nn.ReLU()(1.0 + d2_out_fobj).mean()
 
-                d2_loss = lamb_obj * (d2_loss_robj + d2_loss_fobj)
-                d2_loss += lamb_img * 5 * (d2_loss_rimg + d2_loss_fimg)
+                d2_loss = lamb_img * (d2_loss_robj + d2_loss_fobj)
+                d2_loss += lamb_img * (d2_loss_rimg + d2_loss_fimg)
                 d2_loss.backward()
                 d2_optimizer.step()
 
@@ -443,10 +443,10 @@ def main(args):
                     g_loss = g_loss_fobj * lamb_obj + g_loss_fimg * lamb_img + feat_loss + obj_feat_loss
                     #
                     if use_bkg_net_D:
-                        g_loss += g2_loss_fobj*lamb_obj + g2_loss_fimg*lamb_img*5
+                        g_loss += g2_loss_fobj*lamb_img + g2_loss_fimg*lamb_img
                     #
                     if use_bkg_cls:
-                        g_loss += (bkg_pixel_loss + bkg_feat_loss) * 0.1
+                        g_loss += (bkg_pixel_loss + bkg_feat_loss) * lamb_img
                     #
                     if use_ssim_net_G:
                         g_loss += ssim_loss + obj_ssim_loss
