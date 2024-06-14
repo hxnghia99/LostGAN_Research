@@ -7,3 +7,4 @@ outputs/*
 samples/*
 image_results/*
 *.txt
+dataset_det_seg/*

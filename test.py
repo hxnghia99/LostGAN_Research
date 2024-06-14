@@ -1,5 +1,6 @@
 import os
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+import sys
 import argparse
 import numpy as np
 import cv2
@@ -135,7 +136,7 @@ def main(args):
         label, bbox = label.long().cuda().unsqueeze(-1), bbox.float(),    #keep bbox in cpu --> make input of netG,netD in gpu
         weight_map_orig, weight_map_2_orig = weight_map_orig.float().cuda(), weight_map_2_orig.float().cuda()  
 
-        # weight_map = torch.all(weight_map_orig, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
+        weight_map_fire = torch.all(weight_map_orig[:,:1], dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
         # weight_map_2 = torch.all(weight_map_2_orig, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
 
         z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=False)).float().cuda()
@@ -158,6 +159,9 @@ def main(args):
         #1) fake-fire
         fake_images = (fake_images*0.5+0.5)[0].cpu().detach().numpy().transpose(1, 2, 0)
         fake_images = np.array(fake_images*255, np.uint8)
+        if save_results: 
+            saved_weight_map = weight_map_fire[0].cpu().detach().numpy().transpose(1, 2, 0)
+            saved_fake_images = fake_images.copy()
         g_out_fake  = g_out_fake[0,0].cpu().detach()
         g_out_fake = -1 if g_out_fake<-1 else 1 if g_out_fake>1 else torch.round(g_out_fake,decimals=2)
         fake_images = draw_layout(label, bbox, [256,256], class_names, fake_images, g_out_fake, topleft_name='Fake-fire image')
@@ -182,6 +186,7 @@ def main(args):
         #3) non-fire
         non_fire_images = non_fire_images[0].cpu().detach().numpy().transpose(1, 2, 0)*0.5+0.5
         non_fire_images = np.array(non_fire_images*255, np.uint8)
+        if save_results: saved_non_images = non_fire_images.copy()
         non_fire_images = draw_layout(label, bbox, [256,256], class_names, non_fire_images, topleft_name='Non-fire image')
         
         #Segmentation mask
@@ -280,7 +285,11 @@ def main(args):
                                                 embed_mask64, soft_mask16, soft_mask32, soft_mask64, soft_mask128], [256,256])
 
         cv2.imshow("Test generating Fire + Mask", cv2.cvtColor(output_images.astype(np.uint8), cv2.COLOR_RGB2BGR))
-        if cv2.waitKey() == 'q':
+        cv2.imshow("Test1", cv2.cvtColor(non_fire_images[5:256+25,25:256+25].astype(np.uint8), cv2.COLOR_RGB2BGR))
+        cv2.imshow("Test2", cv2.cvtColor(fake_images[5:256+25,25:256+25].astype(np.uint8), cv2.COLOR_RGB2BGR))
+        if cv2.waitKey() == ord('s'):
+            cv2.imwrite("./outputs/Non_fire.png", cv2.cvtColor(non_fire_images[5:256+25,25:256+25].astype(np.uint8), cv2.COLOR_RGB2BGR))
+            cv2.imwrite("./outputs/Fake_fire.png", cv2.cvtColor(fake_images[5:256+25,25:256+25].astype(np.uint8), cv2.COLOR_RGB2BGR))
             pass
         
         # from pytorch_gan_metrics import get_inception_score
@@ -293,20 +302,45 @@ def main(args):
         # get_inception_score(d)
         
         if save_results:
-            if np.mean(fake_images)>40:
-                id_img+=1
+            r = (saved_fake_images*(1-saved_weight_map))[:,:,0].sum() / ((1-saved_weight_map)[:,:,0].sum())
+            g = (saved_fake_images*(1-saved_weight_map))[:,:,1].sum() / ((1-saved_weight_map)[:,:,1].sum())
+            b = (saved_fake_images*(1-saved_weight_map))[:,:,2].sum() / ((1-saved_weight_map)[:,:,2].sum())
             
-                if id_img > 300:
-                    continue
-                elif id_img<10:
-                    name = '00'+str(id_img)+'_'
-                elif id_img<100:
-                    name = '0'+str(id_img)+'_'
-                else:
-                    name = str(id_img)+'_'
-                cv2.imwrite("./image_results/01_Fire_LostGAN/"+name+"input.png", cv2.cvtColor(np.array(non_fire_images, dtype=np.uint8), cv2.COLOR_RGB2BGR ))
-                cv2.imwrite("./image_results/01_Fire_LostGAN/"+name+"generated_image.png", cv2.resize(cv2.cvtColor(fake_images, cv2.COLOR_RGB2BGR), (256, 256)))
-                
+        if save_results and ((2*r-g-b)/r)>0.4:
+            id_img+=1
+            #Saving image
+            if id_img<10: name = 'fire_0000'+str(id_img) + ".png"
+            elif id_img<100: name = 'fire_000'+str(id_img) + ".png"
+            elif id_img<1000: name = 'fire_00'+str(id_img) + ".png"
+            elif id_img<10000: name = 'fire_0'+str(id_img) + ".png"
+            else: name = 'fire_'+str(id_img) + ".png"
+            
+            cv2.imwrite("./dataset_det_seg/images/"+name, cv2.resize(cv2.cvtColor(saved_fake_images, cv2.COLOR_RGB2BGR), (256, 256)))
+            cv2.imwrite("./dataset_det_seg/images/"+name.replace('fire','non'), cv2.resize(cv2.cvtColor(saved_non_images, cv2.COLOR_RGB2BGR), (256, 256)))
+            #Saving bbox
+            label_bboxes = []
+            for id, cls in enumerate(label[0]):
+                #convert xymin_wh -> xywh
+                if cls[0] == 1 or cls[0] == 2:
+                    tmp = bbox[0][id].tolist()
+                    tmp[0] = tmp[0] + tmp[2]/2
+                    tmp[1] = tmp[1] + tmp[3]/2
+                if cls[0] == 1:
+                    label_bboxes.append([0]+tmp)
+                elif cls[0] == 2:
+                    label_bboxes.append([1]+tmp)
+            
+            with open("./dataset_det_seg/labels/"+name.replace('images','labels').replace('.png','.txt'), 'w') as f:
+                for box in label_bboxes:
+                    assert np.all(np.array(box)>=0), f"there are negative values: {box}"
+
+                    f.write(" ".join(list(map(str,box))) + "\n")
+            with open("./dataset_det_seg/labels/"+name.replace('images','labels').replace('.png','.txt').replace('fire','non'), 'w') as f:
+                for box in []:
+                    f.write(" ".join(list(map(str,box))) + "\n")
+            
+            sys.stdout.write(f"\rProcessed images : {id_img} / {idx}")
+   
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":

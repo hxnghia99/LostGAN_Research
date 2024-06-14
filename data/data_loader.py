@@ -87,8 +87,11 @@ class FireDataset(Dataset):
             fire_objects = []
             smoke_objects = []
             for object_data in objects:
+                object_data['bbox'] = np.clip(object_data['bbox'],0, 1e5)
                 _, _, w, h = object_data['bbox']
                 if w*h/(img_w*img_h) > min_object_size and w*h/(img_w*img_h) < max_object_size: #check criterias
+                    # box = object_data['bbox']
+                    # assert np.all(np.array(box)>=0), f'There is negative value in bbox: {box}'
                     if object_data['class_name'] == 'fire': fire_objects.append(object_data)
                     elif object_data['class_name'] == 'smoke': smoke_objects.append(object_data)
             
