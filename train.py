@@ -53,7 +53,7 @@ def main(args):
     debug_phase = False
     #Common
     args.mode = 'train'
-    args.batch_size = 16 if not debug_phase else 4
+    args.batch_size = 32 if not debug_phase else 4
     args.total_epoch = 200 if not debug_phase else 10
     args.num_epoch_to_save = 5 if not debug_phase else 2
     args.print_freq = 150 if not debug_phase else 1
@@ -294,7 +294,7 @@ def main(args):
                     d_out_rimg_fire, d_out_robj = netD(add_normal_noise_input_D(fire_images), bbox.cuda(), label)
                 else:
                     d_out_rimg_fire, d_out_robj = netD(fire_images, bbox.cuda(), label)
-                d_loss_rimg_fire = torch.tensor(0).cuda() if use_D1_img_loss==0 else torch.nn.ReLU()(1.0 - d_out_rimg_fire).mean()
+                d_loss_rimg_fire = torch.tensor(0).cuda() #if use_D1_img_loss==0 else torch.nn.ReLU()(1.0 - d_out_rimg_fire).mean()
                 d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
                 
                 # #2) real nonfire-image+bkg
@@ -315,7 +315,7 @@ def main(args):
                 else:
                     d_out_fimg_fire, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
                     # _, d_out_fbkg = netD(fake_images.detach(), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
-                d_loss_fimg_fire = torch.tensor(0).cuda() if use_D1_img_loss==0 else torch.nn.ReLU()(1.0 + d_out_fimg_fire).mean()
+                d_loss_fimg_fire = torch.tensor(0).cuda() #if use_D1_img_loss==0 else torch.nn.ReLU()(1.0 + d_out_fimg_fire).mean()
                 d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
                 # if d_out_fbkg==None:
                 #     d_loss_fbkg = torch.tensor([0]).cuda()
@@ -352,19 +352,19 @@ def main(args):
                 netD2.zero_grad()
                 #real bkg_region
                 if use_instance_noise_input_D:
-                    d2_out_rimg, d2_out_robj = netD2(add_normal_noise_input_D(non_fire_images*(weight_map)), bbox_obj.cuda(), label_obj)
+                    d2_out_rimg, _ = netD2(add_normal_noise_input_D(non_fire_images*(weight_map)), bbox_obj.cuda(), label_obj)
                 else:
-                    d2_out_rimg, d2_out_robj = netD2(non_fire_images*(weight_map), bbox_obj.cuda(), label_obj)
+                    d2_out_rimg, _ = netD2(non_fire_images*(weight_map), bbox_obj.cuda(), label_obj)
                 d2_loss_rimg = torch.nn.ReLU()(1.0 - d2_out_rimg).mean()
-                d2_loss_robj = torch.nn.ReLU()(1.0 - d2_out_robj).mean()
+                d2_loss_robj = torch.tensor(0).cuda() #torch.nn.ReLU()(1.0 - d2_out_robj).mean()
                 
                 #fake bkg_region
                 if use_instance_noise_input_D:
-                    d2_out_fimg, d2_out_fobj = netD2(add_normal_noise_input_D(fake_images.detach()*(weight_map)), bbox_obj.cuda(), label_obj)
+                    d2_out_fimg, _ = netD2(add_normal_noise_input_D(fake_images.detach()*(weight_map)), bbox_obj.cuda(), label_obj)
                 else:
-                    d2_out_fimg, d2_out_fobj = netD2(fake_images.detach()*(weight_map), bbox_obj.cuda(), label_obj)
+                    d2_out_fimg, _ = netD2(fake_images.detach()*(weight_map), bbox_obj.cuda(), label_obj)
                 d2_loss_fimg = torch.nn.ReLU()(1.0 + d2_out_fimg).mean()
-                d2_loss_fobj = torch.nn.ReLU()(1.0 + d2_out_fobj).mean()
+                d2_loss_fobj = torch.tensor(0).cuda() #torch.nn.ReLU()(1.0 + d2_out_fobj).mean()
 
                 d2_loss = lamb_img * (d2_loss_robj + d2_loss_fobj)
                 d2_loss += lamb_img * (d2_loss_rimg + d2_loss_fimg)
@@ -387,12 +387,12 @@ def main(args):
                 netG.zero_grad()
                 #Adversarial loss from D1
                 if use_instance_noise_input_D:
-                    g_out_fimg, g_out_fobj = netD(add_normal_noise_input_D(fake_images), bbox.cuda(), label)
+                    _, g_out_fobj = netD(add_normal_noise_input_D(fake_images), bbox.cuda(), label)
                     # _, g_out_fbkg = netD(add_normal_noise_input_D(fake_images), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
                 else:
-                    g_out_fimg, g_out_fobj = netD(fake_images, bbox.cuda(), label)
+                    _, g_out_fobj = netD(fake_images, bbox.cuda(), label)
                     # _, g_out_fbkg = netD(fake_images, bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
-                g_loss_fimg = torch.tensor([0]).cuda() if use_D1_img_loss==0 else -g_out_fimg.mean()
+                g_loss_fimg = torch.tensor(0).cuda() #if use_D1_img_loss==0 else -g_out_fimg.mean()
                 g_loss_fobj = -g_out_fobj.mean()
                 # if g_out_fbkg==None:
                 #     g_loss_fbkg = torch.tensor([0]).cuda()
@@ -402,11 +402,11 @@ def main(args):
                 #Adversarial loss from D2
                 if use_bkg_net_D:
                     if use_instance_noise_input_D:
-                        g2_out_fimg, g2_out_fobj = netD2(add_normal_noise_input_D(fake_images*(weight_map)), bbox_obj.cuda(), label_obj)
+                        g2_out_fimg, _ = netD2(add_normal_noise_input_D(fake_images*(weight_map)), bbox_obj.cuda(), label_obj)
                     else:
-                        g2_out_fimg, g2_out_fobj = netD2(fake_images*(weight_map), bbox_obj.cuda(), label_obj)
+                        g2_out_fimg, _ = netD2(fake_images*(weight_map), bbox_obj.cuda(), label_obj)
                     g2_loss_fimg = - g2_out_fimg.mean()
-                    g2_loss_fobj = - g2_out_fobj.mean()
+                    g2_loss_fobj = torch.tensor(0).cuda() #- g2_out_fobj.mean()
 
                 #structure similarity loss
                 if use_ssim_net_G:
@@ -435,7 +435,7 @@ def main(args):
                     pixel_loss = l1_loss(fake_images*(1-weight_map_3), non_fire_images*(1-weight_map_3)).mean()
 
                     # g_loss = (g_loss_fobj + g_loss_fbkg) * lamb_obj + g_loss_fimg * (lamb_img/2) + pixel_loss + feat_loss
-                    g_loss = g_loss_fobj * lamb_obj + g_loss_fimg * (lamb_img) + pixel_loss + feat_loss
+                    g_loss = g_loss_fobj * lamb_obj + g_loss_fimg * lamb_img + pixel_loss + feat_loss
 
                 else:
                     #Total losses
