@@ -109,6 +109,7 @@ class FireDataset(Dataset):
             # #0 objects or >max objects or do not exist fire_object --> remove image
             # if len(fire_objects)<min_objects_per_image or len(fire_objects)>max_objects_per_image or len(fire_objects)==0:  #max_obj can be 2 or 3
             #     filtered_annotation_flag[idx] = False
+            #     annotation_datas.append(None)
             # else:    
             #     annotation_datas.append(annotation_data)
 
@@ -140,6 +141,7 @@ class FireDataset(Dataset):
             #0 objects or >max objects or do not exist fire_object --> remove image
             if len(new_objects)<min_objects_per_image or len(new_objects)>max_objects_per_image: # or len(fire_objects)==0:  #max_obj can be 2 or 3
                 filtered_annotation_flag[idx] = False
+                annotation_datas.append(None)
             else:    
                 annotation_datas.append(annotation_data)
                 # image = cv2.cvtColor(cv2.imread(fire_image_files[idx]), cv2.COLOR_BGR2HSV)

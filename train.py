@@ -50,7 +50,7 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
 
 def main(args):
     '''Configuration setup'''
-    debug_phase = True
+    debug_phase = False
     #Common
     args.mode = 'train'
     args.batch_size = 32 if not debug_phase else 4
