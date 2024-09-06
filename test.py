@@ -20,8 +20,8 @@ from utils.util import draw_layout, IS_compute_np, truncted_random, normalize_mi
 def main(args):
     #Common
     args.mode = 'train'
-    args.G_path = "./outputs/model_test/051_FireGAN_/G_200.pth"
-    args.D_path = "./outputs/model_test/051_FireGAN_/D_200.pth"
+    args.G_path = "./outputs/model_test/077_FireGAN_test/G_200.pth"
+    args.D_path = "./outputs/model_test/077_FireGAN_test/D_200.pth"
     img_size = (args.img_size, args.img_size)
 
     #Special: Test
@@ -119,7 +119,7 @@ def main(args):
     if save_results:
         id_img = 0
     for idx, data in enumerate(dataloader):
-        [fire_images, non_fire_images], label, bbox, [weight_map_orig, weight_map_2_orig] = data
+        [fire_images, non_fire_images], label, bbox, weight_map_orig = data
         
         # label[0][0] = 1
         # label[0][1] = 2
@@ -134,10 +134,9 @@ def main(args):
 
         fire_images, non_fire_images = fire_images.cuda(), non_fire_images.cuda()
         label, bbox = label.long().cuda().unsqueeze(-1), bbox.float(),    #keep bbox in cpu --> make input of netG,netD in gpu
-        weight_map_orig, weight_map_2_orig = weight_map_orig.float().cuda(), weight_map_2_orig.float().cuda()  
+        weight_map_orig = weight_map_orig.float().cuda()
 
         weight_map_fire = torch.all(weight_map_orig[:,:1], dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
-        # weight_map_2 = torch.all(weight_map_2_orig, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
 
         z_obj = torch.from_numpy(truncted_random(z_obj_dim=z_obj_random_dim, num_o=max_num_obj, thres=z_obj_random_thres, test=False)).float().cuda()
  
@@ -346,7 +345,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode',           type=str,   default="train",             help="processing phase: train, val")
-    parser.add_argument('--dataset',        type=str,   default='fire3',              help='training dataset')
+    parser.add_argument('--dataset',        type=str,   default='fire8',              help='training dataset')
     parser.add_argument('--img_size',       type=int,   default=128,                help='test input resolution')
     parser.add_argument('--G_path',     type=str,   default="./outputs/model_test/HXNGHIA3/G_200.pth",
                                                                                    help='which epoch to load')

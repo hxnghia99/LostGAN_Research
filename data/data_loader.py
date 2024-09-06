@@ -27,7 +27,7 @@ class FireDataset(Dataset):
     def __init__(self, fire_image_dir, non_fire_image_dir, classname_file, image_size=(64, 64),
                  normalize_images=True, max_samples=None, min_object_size=0.02, max_object_size = 0.8,
                  min_objects_per_image=1, max_objects_per_image=2, left_right_flip=False,
-                 weight_map_type='extreme', test=False, debug_phase=False):
+                 weight_map_type='extreme', test=False, debug_phase=False, get_first_fire_smoke=True):
         """
         A PyTorch Dataset for loading self-built fire dataset
     
@@ -65,12 +65,12 @@ class FireDataset(Dataset):
             vocal[name] = idx
         self.vocal = vocal
 
-        fire_image_files = glob.glob(os.path.join(fire_image_dir,"*.jpg"))
+        fire_image_files = glob.glob(os.path.join(fire_image_dir,"*.jpg")) + glob.glob(os.path.join(fire_image_dir,"*.png"))
         fire_image_files = [x.replace("\\", '/') for x in fire_image_files]
         non_fire_image_files = glob.glob(os.path.join(non_fire_image_dir,"*.jpg")) + glob.glob(os.path.join(non_fire_image_dir,"*.png"))
         non_fire_image_files = [x.replace("\\", '/') for x in non_fire_image_files]
         mode = 'train' if 'train' in fire_image_files[0] else 'val'
-        fire_annotation_files = [(x.split(mode+"_images_A")[0] + "annotations" + x.split(mode+"_images_A")[1]).split(".jpg")[0]+".json" for x in fire_image_files]
+        fire_annotation_files = [x.replace(mode+"_images_A", "annotations").replace(".jpg", ".json").replace(".png", ".json") for x in fire_image_files]
 
 
         #Filter out objects that have size less than min_object_size and images with higher number of max_num_objects_per_image
@@ -83,32 +83,63 @@ class FireDataset(Dataset):
             #filtered out objects from min-max size
             img_h, img_w = annotation_data["image_size"]
             objects = annotation_data["objects"]
-            using_objects = []
-            fire_objects = []
-            smoke_objects = []
-            for object_data in objects:
-                object_data['bbox'] = np.clip(object_data['bbox'],0, 1e5)
-                _, _, w, h = object_data['bbox']
+            
+            """New code: random select fire and smoke"""
+            # using_objects = []
+            # fire_objects = []
+            # smoke_objects = []
+            # for object_data in objects:
+            #     object_data['bbox'] = np.clip(object_data['bbox'],0, 1e5)
+            #     _, _, w, h = object_data['bbox']
+            #     if w*h/(img_w*img_h) > min_object_size and w*h/(img_w*img_h) < max_object_size: #check criterias
+            #         # box = object_data['bbox']
+            #         # assert np.all(np.array(box)>=0), f'There is negative value in bbox: {box}'
+            #         if object_data['class_name'] == 'fire': fire_objects.append(object_data)
+            #         elif object_data['class_name'] == 'smoke': smoke_objects.append(object_data)
+            # #random selecting fire
+            # if len(fire_objects)>0:
+            #     fire_id = random.randint(0, len(fire_objects)-1)
+            #     using_objects.append(fire_objects[fire_id])
+            # #random selecting smoke
+            # if len(smoke_objects)>0:
+            #     smoke_id = random.randint(0, len(smoke_objects)-1)
+            #     using_objects.append(smoke_objects[smoke_id])
+            # annotation_data['objects'] = using_objects
+            # 
+            # #0 objects or >max objects or do not exist fire_object --> remove image
+            # if len(fire_objects)<min_objects_per_image or len(fire_objects)>max_objects_per_image or len(fire_objects)==0:  #max_obj can be 2 or 3
+            #     filtered_annotation_flag[idx] = False
+            # else:    
+            #     annotation_datas.append(annotation_data)
+
+
+            """Old code: select first fire and smoke"""
+            new_objects = []
+            #keep only the first 'fire' and the the first 'smoke'
+            fire_obj = False
+            smoke_obj = False
+            for object in objects:
+                _, _, w, h = object['bbox']
                 if w*h/(img_w*img_h) > min_object_size and w*h/(img_w*img_h) < max_object_size: #check criterias
-                    # box = object_data['bbox']
-                    # assert np.all(np.array(box)>=0), f'There is negative value in bbox: {box}'
-                    if object_data['class_name'] == 'fire': fire_objects.append(object_data)
-                    elif object_data['class_name'] == 'smoke': smoke_objects.append(object_data)
-            
-            #random selecting fire
-            if len(fire_objects)>0:
-                fire_id = random.randint(0, len(fire_objects)-1)
-                using_objects.append(fire_objects[fire_id])
-            #random selecting smoke
-            if len(smoke_objects)>0:
-                smoke_id = random.randint(0, len(smoke_objects)-1)
-                using_objects.append(smoke_objects[smoke_id])
-            
-            annotation_data['objects'] = using_objects
+                    if get_first_fire_smoke: #check whether get first fire or not
+                        if not fire_obj and object['class_name']=='fire':
+                            fire_obj = True
+                            new_objects.append(object)
+                        elif not smoke_obj and object['class_name']=='smoke':
+                            smoke_obj = True
+                            new_objects.append(object)
+                        elif object['class_name'] not in ['fire', 'smoke']:
+                            new_objects.append(object)
+                    else:
+                        new_objects.append(object)
+                #replace fire_obj at 1st position
+                if len(new_objects)==2 and new_objects[0]['class_name']=='smoke':
+                    new_objects = [new_objects[1], new_objects[0]] 
+            annotation_data['objects'] = new_objects
+    
             #0 objects or >max objects or do not exist fire_object --> remove image
-            if len(using_objects)<min_objects_per_image or len(using_objects)>max_objects_per_image or len(fire_objects)==0:  #max_obj can be 2 or 3
+            if len(new_objects)<min_objects_per_image or len(new_objects)>max_objects_per_image: # or len(fire_objects)==0:  #max_obj can be 2 or 3
                 filtered_annotation_flag[idx] = False
-                annotation_datas.append(None)
             else:    
                 annotation_datas.append(annotation_data)
                 # image = cv2.cvtColor(cv2.imread(fire_image_files[idx]), cv2.COLOR_BGR2HSV)
@@ -208,7 +239,6 @@ class FireDataset(Dataset):
         #make weight for background / fire_region: 1 outside, 0 inside
         if self.weight_map_type == 'extreme':
             weight_map = weigth_map_generator(np.array(boxes_for_weight_map), self.image_size[0], self.image_size[1], max_obj=self.max_objects_per_image)                   
-            weight_map_2 = weigth_map_generator_2(np.array(boxes_for_weight_map), self.image_size[0], self.image_size[1])    
         elif self.weight_map_type == 'continuous':
             weight_map = np.ones((self.max_objects_per_image, self.image_size[0], self.image_size[1]))
             for i,box in enumerate(boxes):
@@ -260,7 +290,7 @@ class FireDataset(Dataset):
         # if cv2.waitKey() == ord('s'):
         #     print(fire_image_file)
 
-        return list_images, classes, boxes, [weight_map, weight_map_2]
+        return list_images, classes, boxes, weight_map
 
 def test_weightmap(image, weight):
     weight_map = np.repeat(np.expand_dims(np.all(weight, axis=0), axis=0), axis=0, repeats=3)

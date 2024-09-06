@@ -50,7 +50,7 @@ def setup_logger(name, save_dir, distributed_rank, filename="log.txt"):
 
 def main(args):
     '''Configuration setup'''
-    debug_phase = False
+    debug_phase = True
     #Common
     args.mode = 'train'
     args.batch_size = 32 if not debug_phase else 4
@@ -209,13 +209,12 @@ def main(args):
         d1_real_acc_cnt, d1_fake_acc_cnt, d1_real_num_sample, d1_fake_num_sample = 0,0,0,0
         
         for idx, data in enumerate(dataloader):
-            [fire_images, non_fire_images], label, bbox, [weight_map_orig, weight_map_2_orig] = data
+            [fire_images, non_fire_images], label, bbox, weight_map_orig = data
             fire_images, non_fire_images        = fire_images.cuda(), non_fire_images.cuda()
             label, bbox                         = label.long().cuda().unsqueeze(-1), bbox.float()                   #keep bbox in cpu --> make input of netG,netD in gpu
-            weight_map_orig, weight_map_2_orig  = weight_map_orig.float().cuda(), weight_map_2_orig.float().cuda()
+            weight_map_orig  = weight_map_orig.float().cuda()
             #weight_map for only 2 objects (also in case 3 objects)
             weight_map = torch.all(weight_map_orig, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
-            weight_map_2 = torch.all(weight_map_2_orig, dim=1, keepdim=True).expand(fire_images.shape).type(torch.cuda.IntTensor)
             
             #obj noise
             z_obj = torch.randn(fire_images.size(0), max_num_obj, z_obj_random_dim).cuda()     #[batch, num_obj, 128]
@@ -291,9 +290,9 @@ def main(args):
                 
                 #1) real fire-image+objects(including bkg)
                 if use_instance_noise_input_D:
-                    d_out_rimg_fire, d_out_robj = netD(add_normal_noise_input_D(fire_images), bbox.cuda(), label)
+                    d_out_rimg_fire, d_out_robj = netD(add_normal_noise_input_D(fire_images), bbox_obj.cuda(), label_obj)
                 else:
-                    d_out_rimg_fire, d_out_robj = netD(fire_images, bbox.cuda(), label)
+                    d_out_rimg_fire, d_out_robj = netD(fire_images, bbox_obj.cuda(), label_obj)
                 d_loss_rimg_fire = torch.tensor(0).cuda() #if use_D1_img_loss==0 else torch.nn.ReLU()(1.0 - d_out_rimg_fire).mean()
                 d_loss_robj = torch.nn.ReLU()(1.0 - d_out_robj).mean()
                 
@@ -310,10 +309,10 @@ def main(args):
                 
                 #3) fake fire-image+objects+bkg
                 if use_instance_noise_input_D:
-                    d_out_fimg_fire, d_out_fobj = netD(add_normal_noise_input_D(fake_images.detach()), bbox.cuda(), label)
+                    d_out_fimg_fire, d_out_fobj = netD(add_normal_noise_input_D(fake_images.detach()), bbox_obj.cuda(), label_obj)
                     # _, d_out_fbkg = netD(add_normal_noise_input_D(fake_images.detach()), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
                 else:
-                    d_out_fimg_fire, d_out_fobj = netD(fake_images.detach(), bbox.cuda(), label)
+                    d_out_fimg_fire, d_out_fobj = netD(fake_images.detach(), bbox_obj.cuda(), label_obj)
                     # _, d_out_fbkg = netD(fake_images.detach(), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
                 d_loss_fimg_fire = torch.tensor(0).cuda() #if use_D1_img_loss==0 else torch.nn.ReLU()(1.0 + d_out_fimg_fire).mean()
                 d_loss_fobj = torch.nn.ReLU()(1.0 + d_out_fobj).mean()
@@ -328,6 +327,7 @@ def main(args):
                 d_loss += lamb_img * (d_loss_rimg_fire + d_loss_fimg_fire)# + d_loss_rimg_nonfire)
                 d_loss.backward()
                 d_optimizer.step()
+                """For D1: use only fake/real fire obj_loss in this version"""
 
             d_target = torch.ones([d_out_rimg_fire.shape[0],1], dtype=torch.bool).cuda()
             d1_real_acc_cnt += torch.sum((d_out_rimg_fire>0) == d_target).item()
@@ -370,6 +370,7 @@ def main(args):
                 d2_loss += lamb_img * (d2_loss_rimg + d2_loss_fimg)
                 d2_loss.backward()
                 d2_optimizer.step()
+                """For D2: use only fake/real nonfire_region img_loss in this version"""
 
             writer.add_scalar("iter_d2_loss/d2_real_img", d2_loss_rimg*lamb_img*5, global_step=global_steps)
             writer.add_scalar("iter_d2_loss/d2_fake_img", d2_loss_fimg*lamb_img*5, global_step=global_steps)
@@ -387,10 +388,10 @@ def main(args):
                 netG.zero_grad()
                 #Adversarial loss from D1
                 if use_instance_noise_input_D:
-                    _, g_out_fobj = netD(add_normal_noise_input_D(fake_images), bbox.cuda(), label)
+                    _, g_out_fobj = netD(add_normal_noise_input_D(fake_images), bbox_obj.cuda(), label_obj)
                     # _, g_out_fbkg = netD(add_normal_noise_input_D(fake_images), bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
                 else:
-                    _, g_out_fobj = netD(fake_images, bbox.cuda(), label)
+                    _, g_out_fobj = netD(fake_images, bbox_obj.cuda(), label_obj)
                     # _, g_out_fbkg = netD(fake_images, bbox_bkg.cuda() if bbox_bkg!=None else None, label_bkg)
                 g_loss_fimg = torch.tensor(0).cuda() #if use_D1_img_loss==0 else -g_out_fimg.mean()
                 g_loss_fobj = -g_out_fobj.mean()
@@ -440,19 +441,19 @@ def main(args):
                 else:
                     #Total losses
                     # g_loss = (g_loss_fobj + g_loss_fbkg) * lamb_obj + g_loss_fimg * (lamb_img/2) + feat_loss + obj_feat_loss
-                    g_loss = g_loss_fobj * lamb_obj + g_loss_fimg * lamb_img + feat_loss + obj_feat_loss
-                    #
-                    if use_bkg_net_D:
-                        g_loss += g2_loss_fobj*lamb_img + g2_loss_fimg*lamb_img
-                    #
-                    if use_bkg_cls:
-                        g_loss += (bkg_pixel_loss + bkg_feat_loss) * lamb_img
-                    #
+                    g_loss = g_loss_fobj * lamb_obj + g_loss_fimg * lamb_img + feat_loss + obj_feat_loss        # D1_adv_fake_obj + feat + obj_feat
+                    #-------------------------
                     if use_ssim_net_G:
                         g_loss += ssim_loss + obj_ssim_loss
                     else:
-                        g_loss += pixel_loss + obj_pixel_loss
-                    # skip now
+                        g_loss += pixel_loss + obj_pixel_loss                                                   # + pixel + obj_pixel
+                    #-------------------------
+                    if use_bkg_net_D:
+                        g_loss += g2_loss_fobj*lamb_img + g2_loss_fimg*lamb_img                                 # + D2_adv_fake_img*0.05
+                    #-------------------------
+                    if use_bkg_cls:
+                        g_loss += (bkg_pixel_loss + bkg_feat_loss) * lamb_img                                   # + (bkg_pixel + bkg_feat)*0.05
+                    # skip now ---------------
                     if use_identity_loss:
                         g_loss += (rec_pixel_loss + rec_feat_loss) * lamb_obj * lamb_iden
 
@@ -559,7 +560,7 @@ def main(args):
             
             for idx, data in enumerate(dataloader):
                 if idx == 0:
-                    [fire_images, non_fire_images], label, bbox, [weight_map_orig, _] = data
+                    [fire_images, non_fire_images], label, bbox, weight_map_orig = data
                     fire_images, non_fire_images = fire_images[0:1].cuda(), non_fire_images[0:1].cuda()
                     label, bbox = label[0:1].long().cuda().unsqueeze(-1), bbox[0:1].float()
                     weight_map_orig = weight_map_orig.float().cuda()
@@ -691,7 +692,7 @@ def main(args):
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode',           type=str,   default="train",            help="processing phase: train, test")
-    parser.add_argument('--dataset',        type=str,   default="fire3",            help="dataset used for training")
+    parser.add_argument('--dataset',        type=str,   default="fire8",            help="dataset used for training")
     parser.add_argument('--img_size',       type=int,   default=128,                help="training input image size. Default: 128x128")
     parser.add_argument('--batch_size',     type=int,   default=16,                 help="training batch size. Default: 8")
     parser.add_argument('--total_epoch',    type=int,   default=200,                help="numer of total training epochs")
