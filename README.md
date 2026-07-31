@@ -7,7 +7,7 @@
 
 # Fire Image Generation Based on Image-to-Image and Layout-to-Image Translations for Detection and Segmentation Tasks
 
-Official implementation and benchmark results for the paper: **"Fire Image Generation Based on Image-to-Image and Layout-to-Image Translations for Detection and Segmentation Tasks", IEEE Access, July 2027**.
+Official implementation and benchmark results for the paper: **"Fire Image Generation Based on Image-to-Image and Layout-to-Image Translations for Detection and Segmentation Tasks", IEEE Access, July 2026**.
 
 ---
 
@@ -24,7 +24,7 @@ By leveraging spatial bounding box layouts over non-fire input scenes, the frame
 
 The proposed framework takes a **non-fire background image** and a specified **layout (bounding boxes for fire/smoke)** to produce realistic **generated images** alongside paired **binary segmentation masks**.
 
-![Generation Results](images/Figure6.jpg)
+![Generation Results](./images/Figure6.jpg)
 
 *Figure 1: Samples of input non-fire images, layout annotations (fire in red, smoke in blue), synthesized outputs, and generated segmentation masks.*
 
