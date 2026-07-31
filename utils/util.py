@@ -66,15 +66,15 @@ def truncted_random(z_obj_dim, num_o=8, thres=1.0, test=False):
     return z
 
 
-def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=None, topleft_name=None):
+def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=None, topleft_name=None, layout_size=None):
     if input_img is None:
-        temp_img = np.zeros([size[0]+50,size[1]+50,3])
+        temp_img = np.zeros([size[0]+50,size[1]+50,3]) + 255
     else:
         try:
             num_c = input_img.shape[2]
         except:
             num_c = 1
-        temp_img = np.zeros([size[0]+50,size[1]+50,num_c])
+        temp_img = np.zeros([size[0]+50,size[1]+50,num_c]) + 127
         input_img = np.expand_dims(cv2.resize(input_img, size), axis=-1) if num_c==1 else cv2.resize(input_img, size)
         temp_img[25:25+size[0], 25:25+size[1],:] = input_img
         temp_img = np.repeat(temp_img, repeats=3, axis=2) if num_c==1 else temp_img
@@ -92,6 +92,8 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
     rand_text_colors         = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), rand_text_colors))
     
     for i in range(len(bbox)):
+        if label[i] == 3:
+            continue
         label_color = rand_text_colors[label[i]]
         if num_classes < 5:
             if label[i] == 1:
@@ -109,7 +111,7 @@ def draw_layout(label, bbox, size, class_names, input_img=None, D_class_score=No
         x,y = x+25, y+25
         class_name = class_names[label[i]]
         cv2.rectangle(temp_img, (x, y), (x + width, y + height), label_color, 1)  # (0, 255, 0) is the color (green), 2 is the thickness
-        cv2.putText(temp_img, class_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, label_color, 1)
+        cv2.putText(temp_img, class_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5 if layout_size is None else layout_size, label_color, 2)
 
     if D_class_score is not None:
         if D_class_score>=0:

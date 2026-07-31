@@ -189,13 +189,34 @@ class FireDataset(Dataset):
         - boxes: FloatTensor of shape (O, 4) giving boxes for objects in
           (xm, ym, w, h) format, in a [0, 1] coordinate system
         """
+
+        # index = 8
+
         flip = False
         if index >= max(self.len_fire, self.len_non_fire):
             index = index - max(self.len_fire, self.len_non_fire)
             flip = True
         
+        # index = 2039
+        # index = 81
+
         fire_image_file     = self.fire_image_files[index % self.len_fire]
         non_fire_image_file = self.non_fire_image_files[random.randint(0, self.len_non_fire-1) if not self.testing_phase else index % self.len_non_fire]    
+
+
+        # # #Test
+        # non_fire_image_file = './datasets/fire8/train_images_B/004b8a24fa66bf03.jpg'
+        # fire_image_file = "./datasets/fire8/train_images_A/00074.jpg"
+        # index = 73
+        # fire_image_file     = self.fire_image_files[index % self.len_fire]
+
+        # print(fire_image_file)
+        # print(non_fire_image_file)
+
+    # indoor_0387.jpg
+    # 00f19f660f734897.jpg
+    # 005496bc0881c8ec.jpg
+    # 024e15d3944efa43.jpg
 
         #Read image
         with open(fire_image_file, 'rb') as f:
@@ -211,11 +232,26 @@ class FireDataset(Dataset):
         #Read annotations: 2 classes [fire, smoke]
         fire_annotation_data = copy.deepcopy(self.fire_annotation_datas[index % self.len_fire])
         objects = fire_annotation_data['objects']
+        
+        # #Test
+        # H, W = fire_annotation_data['image_size']
+        # # bbox1 = np.array([0.418, 0.202, 0.265, 0.465])
+        # # bbox2 = np.array([0.604, 0.031, 0.188, 0.412])
+
+        # bbox1 = np.array([0.0, 0.513, 0.499, 0.335])
+        # bbox2 = np.array([0.301, 0.323, 0.327, 0.180])
+        # bbox1[0::2] *= W
+        # bbox1[1::2] *= H
+        # bbox2[0::2] *= W
+        # bbox2[1::2] *= H
+        # objects = [{'class_id': 1, 'class_name': 'fire', 'bbox': bbox1}, {'class_id':2, 'class_name':'smoke', 'bbox':bbox2}]
+        
+        
         for object_data in objects:
             xm, ym, w, h = object_data['bbox']
             if flip:
                 object_data['bbox'] = [WF - (xm + w), ym, w, h]
-
+        
         # #TESTING: fire_image + nonfire_image with bboxes
         # fire_box = draw_bbox(fire_image.copy(), objects)
         # fire_box = fire_box.resize((256, 256))
