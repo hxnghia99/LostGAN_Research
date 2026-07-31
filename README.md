@@ -24,9 +24,9 @@ By leveraging spatial bounding box layouts over non-fire input scenes, the frame
 
 The proposed framework takes a **non-fire background image** and a specified **layout (bounding boxes for fire/smoke)** to produce realistic **generated images** alongside paired **binary segmentation masks**.
 
-![Generation Results](./images/Figure6.jpg)
+![Generation Results](./images/Figure6.png)
 
-*Figure 1: Samples of input non-fire images, layout annotations (fire in red, smoke in blue), synthesized outputs, and generated segmentation masks.*
+*Figure 6. The generation results of the proposed method in various scenarios under different random input layouts.*
 
 ---
 
