@@ -1,15 +1,14 @@
+# Fire Image Generation Based on Image-to-Image and Layout-to-Image Translations for Detection and Segmentation Tasks
+
+Official implementation and benchmark results for the paper: **"Fire Image Generation Based on Image-to-Image and Layout-to-Image Translations for Detection and Segmentation Tasks", IEEE Access, July 2026**.
+
+---
 
 ## 📌 Requirements:
 - Python: 3.9
 - Torch: 1.13.1
 - Cuda: 11.6.3
 - Cudnn: 8.4.1
-
-# Fire Image Generation Based on Image-to-Image and Layout-to-Image Translations for Detection and Segmentation Tasks
-
-Official implementation and benchmark results for the paper: **"Fire Image Generation Based on Image-to-Image and Layout-to-Image Translations for Detection and Segmentation Tasks", IEEE Access, July 2026**.
-
----
 
 ## 📌 Summary
 
