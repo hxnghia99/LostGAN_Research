@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .norm_module import SpatialAdaptiveSynBatchNorm2d, SynchronizedBatchNorm2d
+from .mask_regression import *
+
 
 from .norm_module import SpatialAdaptiveBatchNorm2d
 from .mask_regression import MaskRegressNet
@@ -45,23 +48,76 @@ class ResnetGenerator128(nn.Module):
         # self.norm11 = SpatialAdaptiveBatchNorm2d(ch*1, num_w=z_obj_dim)
         self.final = nn.Sequential(nn.BatchNorm2d(ch),
                                    nn.ReLU(),
-                                   nn.utils.spectral_norm(nn.Conv2d(ch, output_dim, kernel_size=3, padding=1), eps=1e-4),
+                                   conv2d(ch, output_dim, 3, 1, 1),
                                    nn.Tanh())
-                                   
+
         # mapping function
         mapping = list()
         self.mapping = nn.Sequential(*mapping)
 
-        self.alpha1 = nn.Parameter(torch.zeros(1, num_classes, 1))
-        self.alpha2 = nn.Parameter(torch.zeros(1, num_classes, 1))
-        self.alpha3 = nn.Parameter(torch.zeros(1, num_classes, 1))
-        self.alpha4 = nn.Parameter(torch.zeros(1, num_classes, 1))
-        
         self.sigmoid = nn.Sigmoid()
         
         self.mask_regress = MaskRegressNet(obj_feat_dim=z_obj_dim, mask_size=mask_size, map_size=map_size)
         self.init_parameter()
-        
+
+    def forward(self, z_im=None, z=None, bbox=None, y=None):
+        b, o = z.size(0), z.size(1)
+        label_embedding = self.label_embedding(y)
+
+        z = z.view(b * o, -1)
+        label_embedding = label_embedding.view(b * o, -1)
+
+        latent_vector = torch.cat((z, label_embedding), dim=1).view(b, o, -1)
+
+        w = self.mapping(latent_vector.view(b * o, -1))
+        # preprocess bbox
+        bmask = self.mask_regress(w, bbox)
+
+        if z_im is None:
+            z_im = torch.randn((b, 128), device=z.device)
+
+        bbox_mask_ = bbox_mask(z, bbox, 64, 64)
+
+        # 4x4
+        x = self.fc(z_im).view(b, -1, 4, 4)
+        # 8x8
+        x, stage_mask = self.res1(x, w, bmask)
+
+        # 16x16
+        hh, ww = x.size(2), x.size(3)
+        seman_bbox = batched_index_select(stage_mask, dim=1, index=y.view(b, o, 1, 1)) # size (b, num_o, h, w)
+        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_, size=(hh, ww), mode='nearest')
+        alpha1 = torch.gather(self.sigmoid(self.alpha1).expand(b, -1, -1), dim=1, index=y.view(b, o, 1)).unsqueeze(-1) 
+        stage_bbox = F.interpolate(bmask, size=(hh, ww), mode='bilinear') * (1 - alpha1) + seman_bbox * alpha1
+        x, stage_mask = self.res2(x, w, stage_bbox)
+
+        # 32x32
+        hh, ww = x.size(2), x.size(3)
+        seman_bbox = batched_index_select(stage_mask, dim=1, index=y.view(b, o, 1, 1)) # size (b, num_o, h, w)
+        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_, size=(hh, ww), mode='nearest')
+        alpha2 = torch.gather(self.sigmoid(self.alpha2).expand(b, -1, -1), dim=1, index=y.view(b, o, 1)).unsqueeze(-1) 
+        stage_bbox = F.interpolate(bmask, size=(hh, ww), mode='bilinear') * (1 - alpha2) + seman_bbox * alpha2
+        x, stage_mask = self.res3(x, w, stage_bbox)
+
+        # 64x64
+        hh, ww = x.size(2), x.size(3)
+        seman_bbox = batched_index_select(stage_mask, dim=1, index=y.view(b, o, 1, 1)) # size (b, num_o, h, w)
+        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_, size=(hh, ww), mode='nearest')
+        alpha3 = torch.gather(self.sigmoid(self.alpha3).expand(b, -1, -1), dim=1, index=y.view(b, o, 1)).unsqueeze(-1) 
+        stage_bbox = F.interpolate(bmask, size=(hh, ww), mode='bilinear') * (1 - alpha3) + seman_bbox * alpha3
+        x, stage_mask = self.res4(x, w, stage_bbox)
+
+        # 128x128
+        hh, ww = x.size(2), x.size(3)
+        seman_bbox = batched_index_select(stage_mask, dim=1, index=y.view(b, o, 1, 1)) # size (b, num_o, h, w)
+        seman_bbox = torch.sigmoid(seman_bbox) * F.interpolate(bbox_mask_, size=(hh, ww), mode='nearest')
+        alpha4 = torch.gather(self.sigmoid(self.alpha4).expand(b, -1, -1), dim=1, index=y.view(b, o, 1)).unsqueeze(-1) 
+        stage_bbox = F.interpolate(bmask, size=(hh, ww), mode='bilinear') * (1 - alpha4) + seman_bbox * alpha4
+        x, _ = self.res5(x, w, stage_bbox)
+
+        # to RGB
+        x = self.final(x)
+        return x
 
     def init_parameter(self):
         for k in self.named_parameters():
@@ -74,13 +130,12 @@ class ResnetGenerator128(nn.Module):
         b, o, _ = bbox.size()
         bo = b*o
 
-        bbox_1 = bbox.float().view(-1, 4)       #[b*o, 4]
-        xm, ym, ww, hh = bbox_1[:, 0], bbox_1[:,1], bbox_1[:,2], bbox_1[:,3]
+class ResnetGenerator256(nn.Module):
+    def __init__(self, ch=64, z_dim=128, num_classes=10, output_dim=3):
+        super(ResnetGenerator256, self).__init__()
+        self.num_classes = num_classes
 
-        xm = xm.contiguous().view(bo, 1).expand(bo, H)      
-        ww = ww.contiguous().view(bo, 1).expand(bo, H)
-        ym = ym.contiguous().view(bo, 1).expand(bo, W)
-        hh = hh.contiguous().view(bo, 1).expand(bo, W)
+        self.label_embedding = nn.Embedding(num_classes, 180)
 
         X = torch.linspace(0, 1, steps=W+1)[0:W].view(1, W).expand(bo, W).cuda(device=bbox.device)
         Y = torch.linspace(0, 1, steps=H+1)[0:H].view(1, H).expand(bo, H).cuda(device=bbox.device)
@@ -98,13 +153,13 @@ class ResnetGenerator128(nn.Module):
         return out_mask.view(b, o, H, W)
 
 
-    def _batched_index_select(self, input, dim, index):
-        expanse = list(input.shape)
-        expanse[0] = -1
-        expanse[dim] = -1
-        index = index.expand(expanse)
-        return torch.gather(input, dim, index)
-        
+        self.mask_regress = MaskRegressNet(num_w)
+        self.init_parameter()
+
+    def forward(self, z, bbox, z_im=None, y=None, include_mask_loss=False):
+        b, o = z.size(0), z.size(1)
+
+        label_embedding = self.label_embedding(y)
 
     def forward(self, z_img, z_obj, bbox, class_label):
         b, o = z_obj.size(0), z_obj.size(1)
@@ -206,7 +261,7 @@ class ResnetGenerator128(nn.Module):
 
 
 class ResBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, mid_ch=None, ksize=3, pad=1, upsample=False, num_w=128, num_classes=184, predict_mask=True, psp_module=False):
+    def __init__(self, in_ch, out_ch, h_ch=None, ksize=3, pad=1, upsample=False, num_w=128, predict_mask=True, psp_module=False):
         super(ResBlock, self).__init__()
         self.upsample = upsample
         self.mid_ch = mid_ch if mid_ch else out_ch
@@ -228,10 +283,10 @@ class ResBlock(nn.Module):
         if self.predict_mask:
             if psp_module:
                 self.conv_mask = nn.Sequential(PSPModule(out_ch, 100),
-                                               nn.Conv2d(100, num_classes, kernel_size=1))
+                                               nn.Conv2d(100, 184, kernel_size=1))
             else:
-                self.conv_mask = nn.Sequential(nn.Conv2d(out_ch, 100, kernel_size=3, padding=1),
-                                               nn.BatchNorm2d(100),
+                self.conv_mask = nn.Sequential(nn.Conv2d(out_ch, 100, 3, 1, 1),
+                                               SynchronizedBatchNorm2d(100),
                                                nn.ReLU(),
                                                nn.Conv2d(100, num_classes, kernel_size=1, padding=0, bias=True))
                 
@@ -241,7 +296,6 @@ class ResBlock(nn.Module):
         x = in_feat   
         x = self.b1(x, latent_vector, bbox_class_mask)
         x = self.activation(x)
-        #if upsampling
         if self.upsample:
             x = F.interpolate(x, scale_factor=2, mode='nearest-exact')
         #spectral(conv) + Ada-bat + activation
@@ -251,7 +305,7 @@ class ResBlock(nn.Module):
         #spectral(conv)
         x = self.conv2(x)
         return x
-    #Short_cut
+
     def shortcut(self, x):
         if self.learnable_sc:
             if self.upsample:
@@ -267,7 +321,48 @@ class ResBlock(nn.Module):
         else:
             mask = None
         return out_feat, mask
-    
+
+
+def conv2d(in_feat, out_feat, kernel_size=3, stride=1, pad=1, spectral_norm=True):
+    conv = nn.Conv2d(in_feat, out_feat, kernel_size, stride, pad)
+    if spectral_norm:
+        return nn.utils.spectral_norm(conv, eps=1e-4)
+    else:
+        return conv
+
+
+def batched_index_select(input, dim, index):
+    expanse = list(input.shape)
+    expanse[0] = -1
+    expanse[dim] = -1
+    index = index.expand(expanse)
+    return torch.gather(input, dim, index)
+
+
+def bbox_mask(x, bbox, H, W):
+    b, o, _ = bbox.size()
+    N = b * o
+
+    bbox_1 = bbox.float().view(-1, 4)
+    x0, y0 = bbox_1[:, 0], bbox_1[:, 1]
+    ww, hh = bbox_1[:, 2], bbox_1[:, 3]
+
+    x0 = x0.contiguous().view(N, 1).expand(N, H)
+    ww = ww.contiguous().view(N, 1).expand(N, H)
+    y0 = y0.contiguous().view(N, 1).expand(N, W)
+    hh = hh.contiguous().view(N, 1).expand(N, W)
+
+    X = torch.linspace(0, 1, steps=W).view(1, W).expand(N, W).cuda(device=x.device)
+    Y = torch.linspace(0, 1, steps=H).view(1, H).expand(N, H).cuda(device=x.device)
+
+    X = (X - x0) / ww
+    Y = (Y - y0) / hh
+
+    X_out_mask = ((X < 0) + (X > 1)).view(N, 1, W).expand(N, H, W)
+    Y_out_mask = ((Y < 0) + (Y > 1)).view(N, H, 1).expand(N, H, W)
+
+    out_mask = 1 - (X_out_mask + Y_out_mask).float().clamp(max=1)
+    return out_mask.view(b, o, H, W)
 
 
 #Residual block: use 2 activation in main branch, conv before downsampling    
@@ -328,29 +423,30 @@ class OptimizedBlock_en(nn.Module):
 
 
 class PSPModule(nn.Module):
-    """Pyramid scene parsing network
-    1) Use Adaptive Avg Pooling + conv --> output size: 1x1, 2x2, 3x3, 6x6
-    2) Interpolate those into the same size of input feature map
-    3) Apply a bottleneck
     """
-    def __init__(self, in_features, out_features=512, sizes=(1,2,3,6)): #sizes: output_size of Adaptive Avg Pooling
+    Reference:
+        Zhao, Hengshuang, et al. *"Pyramid scene parsing network."*
+    """
+    def __init__(self, features, out_features=512, sizes=(1, 2, 3, 6)):
         super(PSPModule, self).__init__()
-        self.stages = nn.ModuleList([self._make_stage(in_features, out_features, size) for size in sizes])
+
+        self.stages = []
+        self.stages = nn.ModuleList([self._make_stage(features, out_features, size) for size in sizes])
         self.bottleneck = nn.Sequential(
-            nn.Conv2d(in_features+len(sizes)*out_features, out_features, kernel_size=3, padding=1, dilation=1, bias=False),     
-            nn.BatchNorm2d(out_features),
+            nn.Conv2d(features+len(sizes)*out_features, out_features, kernel_size=3, padding=1, dilation=1, bias=False),
+            SynchronizedBatchNorm2d(out_features),
             nn.ReLU(),
             nn.Dropout2d(0.1)
-        )
-  
-    def _make_stage(self, in_c, out_c, o_size):
-        prior = nn.AdaptiveAvgPool2d(output_size=(o_size, o_size))          #32x20x20 --> 32x1x1 / 32x2x2
-        conv =  nn.Conv2d(in_c, out_c, kernel_size=1, bias=False)
-        bn =    nn.BatchNorm2d(out_c)
+            )
+
+    def _make_stage(self, features, out_features, size):
+        prior = nn.AdaptiveAvgPool2d(output_size=(size, size))
+        conv = nn.Conv2d(features, out_features, kernel_size=1, bias=False)
+        bn = nn.BatchNorm2d(out_features)
         return nn.Sequential(prior, conv, bn, nn.ReLU())
-    
+
     def forward(self, feats):
         h, w = feats.size(2), feats.size(3)
-        priors = [F.interpolate(input=stage(feats), size=(h,w), mode='bilinear', align_corners=True) for stage in self.stages] + [feats]
-        bottle = self.bottleneck(torch.concat(priors, 1))
+        priors = [F.interpolate(input=stage(feats), size=(h, w), mode='bilinear', align_corners=True) for stage in self.stages] + [feats]
+        bottle = self.bottleneck(torch.cat(priors, 1))
         return bottle

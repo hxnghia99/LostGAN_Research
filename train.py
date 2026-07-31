@@ -1,5 +1,6 @@
 import os, sys
 import argparse, logging, time, datetime
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 from torch import Tensor
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
@@ -96,14 +97,25 @@ def main(args):
     dataset_path =      os.path.join("./datasets", args.dataset)
     if args.dataset == 'coco':
         train_img_dir =     os.path.join(dataset_path, "train2017")
+        val_img_dir =       os.path.join(dataset_path, "val2017")
         instances_json =    os.path.join(dataset_path, "annotations/instances_train2017.json")
-        stuff_json =        os.path.join(dataset_path, "annotations/stuff_train2017.json")
+        val_instances_json =    os.path.join(dataset_path, "annotations/instances_val2017.json")
+        stuff_json =            os.path.join(dataset_path, "annotations/stuff_train2017.json")
+        val_stuff_json =        os.path.join(dataset_path, "annotations/stuff_val2017.json")
+        fire_json =             args.fire_json_path
+        val_fire_json = fire_json.replace("train", "val")
         num_classes = 184
 
         train_data = CocoSceneGraphDataset(image_dir=train_img_dir,
                                        instances_json=instances_json,
                                        stuff_json=stuff_json,
+                                       fire_json=fire_json,
                                        stuff_only=True, image_size=img_size, left_right_flip=True)
+        val_data = CocoSceneGraphDataset(image_dir=val_img_dir,
+                                       instances_json=val_instances_json,
+                                       stuff_json=val_stuff_json,
+                                       fire_json=val_fire_json,
+                                       stuff_only=True, image_size=img_size, left_right_flip=False)
 
     elif 'fire' in args.dataset:
         train_fire_img_dir   = os.path.join(dataset_path, args.mode+"_images_A")
@@ -123,6 +135,14 @@ def main(args):
 
         with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
             class_names = f.read().splitlines()
+        train_img_dir   = os.path.join(dataset_path, "train_images_A")
+        val_img_dir   = os.path.join(dataset_path, "val_images_A")
+        num_classes = 4
+        train_data = FireDataset(image_dir=train_img_dir, class_names=class_names,
+                                image_size=img_size, left_right_flip=True, folder="train_images_A", filter_only_fire=args.filter_only_fire)
+        val_data = FireDataset(image_dir=val_img_dir, class_names=class_names,
+                                image_size=img_size, left_right_flip=True, folder="val_images_A", filter_only_fire=args.filter_only_fire)
+        
 
     #Training pre-steps: dataloader, model, optimizer
     #Data
@@ -558,7 +578,7 @@ def main(args):
             torch.save(netG.state_dict(), os.path.join(args.out_path, 'model/', 'G_%d.pth' % (epoch+1)))
             torch.save(netD.state_dict(), os.path.join(args.out_path, 'model/', 'D_%d.pth' % (epoch+1)))
             
-            for idx, data in enumerate(dataloader):
+            for idx, data in enumerate(val_dataloader):
                 if idx == 0:
                     [fire_images, non_fire_images], label, bbox, weight_map_orig = data
                     fire_images, non_fire_images = fire_images[0:1].cuda(), non_fire_images[0:1].cuda()

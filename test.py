@@ -51,12 +51,12 @@ def main(args):
     save_results = False
     dataset_path =      os.path.join("./datasets", args.dataset)
     if args.dataset == 'coco':
-        train_img_dir =     os.path.join(dataset_path, "val2017")
+        val_img_dir =     os.path.join(dataset_path, "val2017")
         instances_json =    os.path.join(dataset_path, "annotations/instances_val2017.json")
         stuff_json =        os.path.join(dataset_path, "annotations/stuff_val2017.json")
         num_classes = 184
 
-        train_data = CocoSceneGraphDataset(image_dir=train_img_dir,
+        val_data = CocoSceneGraphDataset(image_dir=val_img_dir,
                                        instances_json=instances_json,
                                        stuff_json=stuff_json,
                                        stuff_only=True, image_size=img_size, left_right_flip=False)
@@ -81,12 +81,14 @@ def main(args):
 
         with open(os.path.join(dataset_path, "class_names.txt"), "r") as f:
             class_names = f.read().splitlines()
-
+        val_img_dir   = os.path.join(dataset_path, "val_images_A")
+        num_classes = 4
+        val_data = FireDataset(image_dir=val_img_dir, class_names=class_names,
+                                image_size=img_size, left_right_flip=False, folder="val_images_A", filter_only_fire=args.filter_only_fire)
 
     #Training pre-steps: dataloader, model, optimizer
     #Data
-    dataloader = torch.utils.data.DataLoader(train_data, batch_size=1, drop_last=True, shuffle=False, num_workers=0)#num_workers=args.num_workers)
-
+    dataloader = torch.utils.data.DataLoader(val_data, batch_size=1, drop_last=True, shuffle=False, num_workers=0)#num_workers=args.num_workers)
 
     netG = ResnetGenerator128(num_classes=num_classes, output_dim=3, z_obj_random_dim=z_obj_random_dim, z_obj_class_dim=z_obj_cls_dim,
                               random_input_noise=use_random_input_noise_w_enc_feat, test=phase_testing, use_res11=use_res11).cuda()
